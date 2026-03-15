@@ -191,4 +191,5 @@ export type NoticeMessage = {
 	tone: NoticeTone;
 	message: string;
 	id: number;
+	durationMs?: number;
 };
