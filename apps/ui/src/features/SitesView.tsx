@@ -346,6 +346,7 @@ export const SitesView = ({
                 const isToday = site.last_checkin_date === today;
                 const message = isToday ? site.last_checkin_message : null;
                 const canCheckin = site.site_type === "new-api";
+                const checkinDisabled = !canCheckin;
                 const systemReady = Boolean(
                   site.system_token && site.system_userid,
                 );
@@ -438,17 +439,21 @@ export const SitesView = ({
                       >
                         {testPending ? "测试中..." : "连通测试"}
                       </Button>
-                      {canCheckin && (
-                        <Button
-                          class="h-9 w-full px-3 text-xs"
-                          size="sm"
-                          type="button"
-                          disabled={checkinPending}
-                          onClick={() => onCheckin(site)}
-                        >
-                          {checkinPending ? "签到中..." : "签到"}
-                        </Button>
-                      )}
+                      <Button
+                        class="h-9 w-full px-3 text-xs"
+                        size="sm"
+                        type="button"
+                        disabled={checkinPending || checkinDisabled}
+                        title={checkinDisabled ? "仅 new-api 支持签到" : undefined}
+                        onClick={() => {
+                          if (!canCheckin) {
+                            return;
+                          }
+                          onCheckin(site);
+                        }}
+                      >
+                        {checkinPending ? "签到中..." : "签到"}
+                      </Button>
                       <Button
                         class="h-9 w-full px-3 text-xs"
                         size="sm"
@@ -539,6 +544,7 @@ export const SitesView = ({
                 {pagedSites.map((site) => {
                   const isActive = site.status === "active";
                   const canCheckin = site.site_type === "new-api";
+                  const checkinDisabled = !canCheckin;
                   const callTokenCount = site.call_tokens?.length ?? 0;
                   const testPending = isActionPending(`site:test:${site.id}`);
                   const checkinPending = isActionPending(
@@ -623,17 +629,21 @@ export const SitesView = ({
                           >
                             {testPending ? "测试中..." : "连通测试"}
                           </Button>
-                          {canCheckin && (
-                            <Button
-                              class="h-9 px-3 text-xs"
-                              size="sm"
-                              type="button"
-                              disabled={checkinPending}
-                              onClick={() => onCheckin(site)}
-                            >
-                              {checkinPending ? "签到中..." : "签到"}
-                            </Button>
-                          )}
+                          <Button
+                            class="h-9 px-3 text-xs"
+                            size="sm"
+                            type="button"
+                            disabled={checkinPending || checkinDisabled}
+                            title={checkinDisabled ? "仅 new-api 支持签到" : undefined}
+                            onClick={() => {
+                              if (!canCheckin) {
+                                return;
+                              }
+                              onCheckin(site);
+                            }}
+                          >
+                            {checkinPending ? "签到中..." : "签到"}
+                          </Button>
                           <Button
                             class="h-9 px-3 text-xs"
                             size="sm"

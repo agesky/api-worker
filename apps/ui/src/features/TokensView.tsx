@@ -57,6 +57,8 @@ const tokenColumnOptions = [
 	{ id: "channels", label: "渠道限制", width: "minmax(0,0.7fr)" },
 	{ id: "actions", label: "操作", width: "minmax(0,1.3fr)", locked: true },
 ];
+const tokenColumnDefaults = tokenColumnOptions.map((column) => column.id);
+const tokenColumnVersion = "2026-03-17";
 
 /**
  * Renders the tokens management view.
@@ -97,12 +99,20 @@ export const TokensView = ({
 		? "更新令牌名称、额度、状态与过期时间。"
 		: "创建后会自动复制令牌，请妥善保存。";
 	const submitLabel = isEditing ? "保存修改" : "生成令牌";
-	const [visibleColumns, setVisibleColumns] = useState(() =>
-		loadColumnPrefs(
-			"columns:tokens",
-			tokenColumnOptions.map((column) => column.id),
-		),
-	);
+	const [visibleColumns, setVisibleColumns] = useState(() => {
+		if (typeof window === "undefined") {
+			return tokenColumnDefaults;
+		}
+		const versionKey = "columns:tokens:version";
+		const storedVersion = window.localStorage.getItem(versionKey);
+		const stored = loadColumnPrefs("columns:tokens", tokenColumnDefaults);
+		if (storedVersion !== tokenColumnVersion) {
+			window.localStorage.setItem(versionKey, tokenColumnVersion);
+			persistColumnPrefs("columns:tokens", tokenColumnDefaults);
+			return tokenColumnDefaults;
+		}
+		return stored;
+	});
 	const visibleColumnSet = useMemo(
 		() => new Set(visibleColumns),
 		[visibleColumns],

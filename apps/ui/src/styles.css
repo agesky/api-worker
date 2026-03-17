@@ -438,11 +438,12 @@ body {
 	gap: 8px;
 	border-radius: 999px;
 	border: 1px solid var(--app-border);
-	padding: 6px 10px;
+	padding: 6px 12px;
 	font-size: 11px;
 	color: var(--app-ink-muted);
-	background: rgba(255, 255, 255, 0.85);
-	box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
+	background: rgba(255, 255, 255, 0.9);
+	box-shadow: 0 10px 22px rgba(15, 23, 42, 0.08);
+	backdrop-filter: blur(10px) saturate(1.05);
 }
 
 .app-page-size span {
@@ -452,13 +453,19 @@ body {
 }
 
 .app-page-size__select {
-	border-color: transparent;
-	background: rgba(255, 255, 255, 0.95);
+	border: 1px solid rgba(148, 163, 184, 0.5);
+	background: #ffffff;
 	padding: 4px 28px 4px 10px;
-	box-shadow: 0 8px 16px rgba(15, 23, 42, 0.08);
+	box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08);
 	height: 30px;
-	min-width: 86px;
+	min-width: 92px;
 	text-align: right;
+	font-weight: 600;
+	color: var(--app-ink);
+	transition:
+		border-color 180ms ease-out,
+		box-shadow 180ms ease-out,
+		background-color 180ms ease-out;
 	appearance: none;
 	background-image:
 		linear-gradient(45deg, transparent 50%, var(--app-ink-muted) 50%),
@@ -468,6 +475,12 @@ body {
 		calc(100% - 9px) 52%;
 	background-size: 5px 5px;
 	background-repeat: no-repeat;
+}
+
+.app-page-size__select:focus {
+	border-color: var(--app-accent);
+	box-shadow: 0 0 0 3px var(--app-accent-soft);
+	outline: none;
 }
 
 .app-table {
@@ -726,7 +739,6 @@ body {
 
 .app-popover-content--tight {
 	min-width: 0;
-	width: auto;
 }
 
 .app-popover-content--spaced {
