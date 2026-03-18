@@ -1,11 +1,11 @@
 import { createMiddleware } from "hono/factory";
 import type { AppEnv } from "../env";
-import { getCacheConfig } from "../services/settings";
 import { canConsumeQuota, normalizeQuota } from "../services/quota";
+import { getCacheConfig } from "../services/settings";
+import { withJsonCache } from "../utils/cache";
 import { sha256Hex } from "../utils/crypto";
 import { jsonError } from "../utils/http";
 import { getBearerToken } from "../utils/request";
-import { withJsonCache } from "../utils/cache";
 
 export type TokenRecord = {
 	id: string;
@@ -37,10 +37,9 @@ export const tokenAuth = createMiddleware<AppEnv>(async (c, next) => {
 			enabled: cacheConfig.enabled,
 		},
 		async () => {
-			const row = await c.env.DB
-				.prepare(
-					"SELECT id, name, quota_total, quota_used, status, allowed_channels, expires_at FROM tokens WHERE key_hash = ?",
-				)
+			const row = await c.env.DB.prepare(
+				"SELECT id, name, quota_total, quota_used, status, allowed_channels, expires_at FROM tokens WHERE key_hash = ?",
+			)
 				.bind(tokenHash)
 				.first<TokenRecord>();
 			return row ?? null;

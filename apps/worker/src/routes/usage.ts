@@ -139,7 +139,9 @@ usage.get("/", async (c) => {
 			}
 
 			const rawLimit = Number(query.limit ?? 50);
-			const normalizedLimit = Number.isNaN(rawLimit) ? 50 : Math.floor(rawLimit);
+			const normalizedLimit = Number.isNaN(rawLimit)
+				? 50
+				: Math.floor(rawLimit);
 			const limit = Math.min(Math.max(normalizedLimit, 1), 200);
 			const rawOffset = Number(query.offset ?? 0);
 			const normalizedOffset = Number.isNaN(rawOffset)

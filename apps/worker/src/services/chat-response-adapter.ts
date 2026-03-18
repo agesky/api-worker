@@ -260,7 +260,9 @@ function writeGeminiChunk(
 	controller.enqueue(encoder.encode(`${JSON.stringify(data)}\n`));
 }
 
-async function adaptOpenAiJsonToAnthropic(options: AdaptOptions): Promise<Response> {
+async function adaptOpenAiJsonToAnthropic(
+	options: AdaptOptions,
+): Promise<Response> {
 	const payload = (await options.response
 		.clone()
 		.json()
@@ -283,7 +285,9 @@ async function adaptOpenAiJsonToAnthropic(options: AdaptOptions): Promise<Respon
 			: {};
 	const promptTokens = Number(usage.prompt_tokens ?? 0) || 0;
 	const completionTokens = Number(usage.completion_tokens ?? 0) || 0;
-	const stopReason = mapOpenAiFinishReasonToAnthropic(firstChoice.finish_reason);
+	const stopReason = mapOpenAiFinishReasonToAnthropic(
+		firstChoice.finish_reason,
+	);
 	const text = openAiContentToText(message.content);
 	const transformed = {
 		id:
@@ -460,7 +464,9 @@ function adaptOpenAiSseToAnthropic(options: AdaptOptions): Response {
 	});
 }
 
-async function adaptAnthropicJsonToOpenAi(options: AdaptOptions): Promise<Response> {
+async function adaptAnthropicJsonToOpenAi(
+	options: AdaptOptions,
+): Promise<Response> {
 	const payload = (await options.response
 		.clone()
 		.json()
@@ -552,7 +558,8 @@ function adaptAnthropicSseToOpenAi(options: AdaptOptions): Response {
 							newlineIndex = buffer.indexOf("\n");
 							continue;
 						}
-						const eventType = typeof parsed.type === "string" ? parsed.type : "";
+						const eventType =
+							typeof parsed.type === "string" ? parsed.type : "";
 						if (!started && eventType === "message_start") {
 							started = true;
 							writeOpenAiSseChunk(controller, encoder, {
@@ -642,7 +649,9 @@ function adaptAnthropicSseToOpenAi(options: AdaptOptions): Response {
 	});
 }
 
-async function adaptGeminiJsonToOpenAi(options: AdaptOptions): Promise<Response> {
+async function adaptGeminiJsonToOpenAi(
+	options: AdaptOptions,
+): Promise<Response> {
 	const payload = (await options.response
 		.clone()
 		.json()
@@ -651,7 +660,9 @@ async function adaptGeminiJsonToOpenAi(options: AdaptOptions): Promise<Response>
 		return options.response;
 	}
 	const text = geminiCandidateText(payload);
-	const finishReason = mapGeminiFinishReasonToOpenAi(geminiFinishReason(payload));
+	const finishReason = mapGeminiFinishReasonToOpenAi(
+		geminiFinishReason(payload),
+	);
 	const usage = geminiUsageTokens(payload);
 	const transformed = {
 		id: `chatcmpl_${Date.now()}`,
@@ -680,7 +691,9 @@ async function adaptGeminiJsonToOpenAi(options: AdaptOptions): Promise<Response>
 	});
 }
 
-async function adaptGeminiJsonToAnthropic(options: AdaptOptions): Promise<Response> {
+async function adaptGeminiJsonToAnthropic(
+	options: AdaptOptions,
+): Promise<Response> {
 	const payload = (await options.response
 		.clone()
 		.json()
@@ -712,7 +725,9 @@ async function adaptGeminiJsonToAnthropic(options: AdaptOptions): Promise<Respon
 	});
 }
 
-async function adaptOpenAiJsonToGemini(options: AdaptOptions): Promise<Response> {
+async function adaptOpenAiJsonToGemini(
+	options: AdaptOptions,
+): Promise<Response> {
 	const payload = (await options.response
 		.clone()
 		.json()
@@ -757,7 +772,9 @@ async function adaptOpenAiJsonToGemini(options: AdaptOptions): Promise<Response>
 	});
 }
 
-async function adaptAnthropicJsonToGemini(options: AdaptOptions): Promise<Response> {
+async function adaptAnthropicJsonToGemini(
+	options: AdaptOptions,
+): Promise<Response> {
 	const payload = (await options.response
 		.clone()
 		.json()
@@ -833,7 +850,11 @@ function adaptGeminiSseToOpenAi(options: AdaptOptions): Response {
 								created,
 								model: options.model ?? "",
 								choices: [
-									{ index: 0, delta: { role: "assistant" }, finish_reason: null },
+									{
+										index: 0,
+										delta: { role: "assistant" },
+										finish_reason: null,
+									},
 								],
 							});
 						}
@@ -952,7 +973,9 @@ function adaptGeminiSseToAnthropic(options: AdaptOptions): Response {
 							writeSseEvent(controller, encoder, "message_delta", {
 								type: "message_delta",
 								delta: { stop_reason: stopReason, stop_sequence: null },
-								usage: { output_tokens: geminiUsageTokens(parsed).completionTokens },
+								usage: {
+									output_tokens: geminiUsageTokens(parsed).completionTokens,
+								},
 							});
 							writeSseEvent(controller, encoder, "message_stop", {
 								type: "message_stop",
@@ -1051,7 +1074,9 @@ function adaptOpenAiSseToGemini(options: AdaptOptions): Response {
 				}
 				if (!lastFinishReason) {
 					writeGeminiChunk(controller, encoder, {
-						candidates: [{ content: { role: "model", parts: [] }, finishReason: "STOP" }],
+						candidates: [
+							{ content: { role: "model", parts: [] }, finishReason: "STOP" },
+						],
 					});
 				}
 				controller.close();
@@ -1096,7 +1121,8 @@ function adaptAnthropicSseToGemini(options: AdaptOptions): Response {
 							newlineIndex = buffer.indexOf("\n");
 							continue;
 						}
-						const eventType = typeof parsed.type === "string" ? parsed.type : "";
+						const eventType =
+							typeof parsed.type === "string" ? parsed.type : "";
 						if (eventType === "content_block_delta") {
 							const delta =
 								parsed.delta && typeof parsed.delta === "object"
@@ -1119,7 +1145,8 @@ function adaptAnthropicSseToGemini(options: AdaptOptions): Response {
 									? (parsed.delta as Record<string, unknown>)
 									: {};
 							lastFinishReason =
-								mapAnthropicStopReasonToGemini(delta.stop_reason) ?? lastFinishReason;
+								mapAnthropicStopReasonToGemini(delta.stop_reason) ??
+								lastFinishReason;
 						}
 						newlineIndex = buffer.indexOf("\n");
 					}
@@ -1185,7 +1212,9 @@ const adapters: Record<string, AdapterFn> = {
 	},
 };
 
-export async function adaptChatResponse(options: AdaptOptions): Promise<Response> {
+export async function adaptChatResponse(
+	options: AdaptOptions,
+): Promise<Response> {
 	if (options.upstreamProvider === options.downstreamProvider) {
 		return options.response;
 	}

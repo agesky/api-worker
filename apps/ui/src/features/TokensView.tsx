@@ -157,7 +157,7 @@ export const TokensView = ({
 	}, [isTokenModalOpen, onCloseModal]);
 	return (
 		<div class="space-y-5">
-			<div class="animate-fade-up space-y-4">
+			<div class="app-panel animate-fade-up space-y-4">
 				<div class="flex flex-wrap items-center justify-between gap-3">
 					<div>
 						<h3 class="app-title text-lg">令牌列表</h3>
@@ -181,7 +181,7 @@ export const TokensView = ({
 					</div>
 				</div>
 				<div>
-					<div class="space-y-3 md:hidden">
+					<div class="app-mobile-stack space-y-3 md:hidden">
 						{pagedTokens.length === 0 ? (
 							<Card class="text-center text-sm text-[color:var(--app-ink-muted)]">
 								<p>暂无令牌，请先创建。</p>
@@ -300,9 +300,9 @@ export const TokensView = ({
 							})
 						)}
 					</div>
-					<div class="app-surface hidden overflow-hidden md:block">
+					<div class="app-surface app-list-shell hidden overflow-hidden md:block">
 						<div
-							class="grid gap-3 bg-white/60 px-4 py-3 text-xs uppercase tracking-widest text-[color:var(--app-ink-muted)]"
+							class="app-list-header grid gap-3 px-4 py-3 text-xs uppercase tracking-widest text-[color:var(--app-ink-muted)]"
 							style={`grid-template-columns: ${tokenGridTemplate};`}
 						>
 							{visibleColumnSet.has("name") && <div>名称</div>}
@@ -315,7 +315,7 @@ export const TokensView = ({
 							{visibleColumnSet.has("actions") && <div>操作</div>}
 						</div>
 						{pagedTokens.length === 0 ? (
-							<div class="px-4 py-10 text-center text-sm text-[color:var(--app-ink-muted)]">
+							<div class="app-list-empty px-4 py-10 text-center text-sm text-[color:var(--app-ink-muted)]">
 								<p>暂无令牌，请先创建。</p>
 								<Button
 									class="mt-4 h-9 px-4 text-xs"
@@ -328,7 +328,7 @@ export const TokensView = ({
 								</Button>
 							</div>
 						) : (
-							<div class="divide-y divide-white/60">
+							<div class="app-list-body divide-y divide-white/60">
 								{pagedTokens.map((tokenItem) => {
 									const isActive = tokenItem.status === "active";
 									const revealPending = isActionPending(
@@ -342,7 +342,7 @@ export const TokensView = ({
 									);
 									return (
 										<div
-											class="grid items-center gap-3 px-4 py-4 text-sm"
+											class="app-list-row grid items-center gap-3 px-4 py-4 text-sm"
 											key={tokenItem.id}
 											style={`grid-template-columns: ${tokenGridTemplate};`}
 										>
@@ -443,7 +443,7 @@ export const TokensView = ({
 						)}
 					</div>
 				</div>
-				<div class="flex flex-col gap-3 text-xs text-[color:var(--app-ink-muted)] sm:flex-row sm:items-center sm:justify-between">
+				<div class="app-pagination-bar flex flex-col gap-3 text-xs text-[color:var(--app-ink-muted)] sm:flex-row sm:items-center sm:justify-between">
 					<div class="flex flex-wrap items-center gap-2">
 						<span class="text-xs text-[color:var(--app-ink-muted)]">
 							共 {tokenTotal} 条 · {displayPages} 页
@@ -455,26 +455,23 @@ export const TokensView = ({
 							onPageChange={onPageChange}
 						/>
 					</div>
-					<label class="app-page-size" for="token-page-size">
-						<span>每页条数</span>
-						<Select
-							variant="pill"
-							class="w-auto text-xs app-page-size__select"
-							id="token-page-size"
-							value={String(tokenPageSize)}
-							onChange={(event) => {
-								onPageSizeChange(
-									Number((event.currentTarget as HTMLSelectElement).value),
-								);
-							}}
-						>
+					<div class="app-page-size-control">
+						<span class="app-page-size-control__label">每页</span>
+						<div class="app-page-size-control__chips">
 							{pageSizeOptions.map((size) => (
-								<option key={size} value={String(size)}>
+								<button
+									class={`app-page-size-chip ${
+										tokenPageSize === size ? "app-page-size-chip--active" : ""
+									}`}
+									key={size}
+									type="button"
+									onClick={() => onPageSizeChange(size)}
+								>
 									{size}
-								</option>
+								</button>
 							))}
-						</Select>
-					</label>
+						</div>
+					</div>
 				</div>
 			</div>
 			{isTokenModalOpen && (

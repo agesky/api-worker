@@ -12,12 +12,12 @@ import {
 	updateChannel,
 } from "../services/channel-repo";
 import { runCheckinAll, runCheckinSingle } from "../services/checkin-runner";
+import { bumpCacheVersions } from "../services/settings";
 import {
 	buildSiteMetadata,
 	parseSiteMetadata,
 	type SiteType,
 } from "../services/site-metadata";
-import { bumpCacheVersions } from "../services/settings";
 import { generateToken } from "../utils/crypto";
 import { jsonError } from "../utils/http";
 import { nowIso } from "../utils/time";

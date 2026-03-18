@@ -1,8 +1,8 @@
 import type { D1Database } from "@cloudflare/workers-types";
 import { nowIso } from "../utils/time";
 import { normalizeBaseUrl } from "../utils/url";
-import { modelsToJson, normalizeModelsInput } from "./channel-models";
 import { upsertChannelModelCapabilities } from "./channel-model-capabilities";
+import { modelsToJson, normalizeModelsInput } from "./channel-models";
 
 export type ChannelTestResult = {
 	ok: boolean;

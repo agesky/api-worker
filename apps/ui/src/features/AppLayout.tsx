@@ -67,7 +67,7 @@ export const AppLayout = ({
 	};
 
 	return (
-		<div class="relative flex min-h-screen flex-col lg:grid lg:grid-cols-[260px_1fr]">
+		<div class="relative flex min-h-screen flex-col lg:grid lg:grid-cols-[300px_1fr]">
 			<input class="peer hidden" id="app-nav-toggle" type="checkbox" />
 			<header class="app-bar flex items-center justify-between px-4 py-4 lg:hidden">
 				<div class="flex items-center gap-3">
@@ -129,12 +129,14 @@ export const AppLayout = ({
 					</Button>
 				</div>
 			</header>
-			<aside class="app-sidebar fixed inset-y-0 left-0 z-40 flex w-72 -translate-x-full flex-col overflow-y-auto px-5 py-8 shadow-xl transition-transform duration-300 ease-in-out peer-checked:translate-x-0 lg:sticky lg:top-0 lg:z-auto lg:h-screen lg:w-auto lg:translate-x-0 lg:shadow-none">
-				<div class="mb-8 flex flex-col gap-1.5">
-					<h2 class="app-title text-lg">api-workers</h2>
-					<span class="text-xs uppercase tracking-widest text-[color:var(--app-ink-muted)]">
-						console
-					</span>
+			<aside class="app-sidebar fixed inset-y-0 left-0 z-40 flex w-[18.5rem] max-w-[86vw] -translate-x-full flex-col overflow-y-auto rounded-r-[28px] px-5 py-6 shadow-xl transition-transform duration-300 ease-in-out peer-checked:translate-x-0 lg:sticky lg:top-5 lg:z-10 lg:mx-5 lg:my-5 lg:h-[calc(100vh-40px)] lg:w-auto lg:translate-x-0 lg:rounded-[30px] lg:shadow-none">
+				<div class="mb-8 flex flex-col gap-3">
+					<div class="flex flex-col gap-1.5">
+						<h2 class="app-title text-[21px]">api-workers</h2>
+						<span class="text-xs uppercase tracking-widest text-[color:var(--app-ink-muted)]">
+							control center
+						</span>
+					</div>
 				</div>
 				<nav class="flex flex-col gap-2.5">
 					{tabs.map((tab) => (
@@ -152,7 +154,7 @@ export const AppLayout = ({
 						</button>
 					))}
 				</nav>
-				<div class="mt-auto hidden w-full items-center justify-between gap-2 rounded-2xl border border-[color:var(--app-border)] bg-white/70 px-3 py-2 text-xs text-[color:var(--app-ink-muted)] lg:flex">
+				<div class="mt-auto hidden w-full items-center justify-between gap-2 rounded-[18px] border border-[color:var(--app-border)] bg-[color:var(--app-surface-muted)] px-3 py-2 text-xs text-[color:var(--app-ink-muted)] lg:flex">
 					<span>{token ? "已登录" : "未登录"}</span>
 					<Button
 						class="h-8 px-3 text-[11px]"
@@ -165,8 +167,8 @@ export const AppLayout = ({
 					</Button>
 				</div>
 			</aside>
-			<main class="px-4 pt-5 pb-16 sm:px-10 sm:pt-8">
-				{children}
+			<main class="px-4 pt-5 pb-16 sm:px-10 sm:pt-8 lg:pt-5 lg:pl-0 lg:pr-8">
+				<div class="animate-fade-up">{children}</div>
 			</main>
 			{notices.length > 0 && (
 				<ToastViewport aria-live="polite">

@@ -1,5 +1,5 @@
 import { Button } from "./button";
-import { cx, type ClassName } from "./utils";
+import { type ClassName, cx } from "./utils";
 
 export type PaginationItem = number | "ellipsis";
 

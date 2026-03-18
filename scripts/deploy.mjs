@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { access } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { access } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
@@ -13,7 +13,7 @@ const BUN_CMD = (() => {
 		return process.env.BUN_BIN;
 	}
 	const npmExec = process.env.npm_execpath;
-	if (npmExec && npmExec.toLowerCase().includes("bun")) {
+	if (npmExec?.toLowerCase().includes("bun")) {
 		return npmExec;
 	}
 	if (process.env.BUN_INSTALL) {
@@ -77,8 +77,12 @@ const parseArgs = () => {
 
 const printHelp = () => {
 	console.log("Usage:");
-	console.log("  node scripts/deploy.mjs init [--target both] [--migrate true]");
-	console.log("  node scripts/deploy.mjs update [--target auto] [--migrate auto]");
+	console.log(
+		"  node scripts/deploy.mjs init [--target both] [--migrate true]",
+	);
+	console.log(
+		"  node scripts/deploy.mjs update [--target auto] [--migrate auto]",
+	);
 	console.log("");
 	console.log("Options:");
 	console.log("  --action init|update    部署动作（可用位置参数替代）");
@@ -87,7 +91,9 @@ const printHelp = () => {
 	console.log("  --config <path>         wrangler.toml 路径");
 	console.log("  --skip-install          跳过 bun install");
 	console.log("");
-	console.log("说明: 本脚本仅执行本地流程（构建 + 本地迁移），不会触发远程部署。");
+	console.log(
+		"说明: 本脚本仅执行本地流程（构建 + 本地迁移），不会触发远程部署。",
+	);
 };
 
 const run = (command, args, options = {}) =>
@@ -161,14 +167,20 @@ const promptChoice = async (rl, label, choices, defaultValue) => {
 	const choicesText = choices.join("/");
 	const defaultText = defaultValue ? ` [${defaultValue}]` : "";
 	while (true) {
-		const answer = (await rl.question(`${label} (${choicesText})${defaultText}: `))
+		const answer = (
+			await rl.question(`${label} (${choicesText})${defaultText}: `)
+		)
 			.trim()
 			.toLowerCase();
 		if (!answer && defaultValue) {
 			return defaultValue;
 		}
 		const numeric = Number(answer);
-		if (Number.isInteger(numeric) && numeric >= 1 && numeric <= choices.length) {
+		if (
+			Number.isInteger(numeric) &&
+			numeric >= 1 &&
+			numeric <= choices.length
+		) {
 			return choices[numeric - 1];
 		}
 		if (choices.includes(answer)) {

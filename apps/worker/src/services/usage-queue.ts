@@ -1,6 +1,9 @@
 import type { D1Database, ExecutionContext } from "@cloudflare/workers-types";
 import type { Bindings } from "../env";
-import { recordChannelModelError, upsertChannelModelCapabilities } from "./channel-model-capabilities";
+import {
+	recordChannelModelError,
+	upsertChannelModelCapabilities,
+} from "./channel-model-capabilities";
 import type { UsageInput } from "./usage";
 import { recordUsage } from "./usage";
 

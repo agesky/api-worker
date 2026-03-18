@@ -1,4 +1,5 @@
 import type { JSX } from "hono/jsx";
+import { createPortal } from "hono/jsx/dom";
 import { cx } from "./utils";
 
 export type DialogProps = {
@@ -7,22 +8,32 @@ export type DialogProps = {
 	children?: unknown;
 };
 
-export const Dialog = ({ open, onClose, children }: DialogProps) => {
+export const Dialog = ({
+	open,
+	onClose,
+	children,
+}: DialogProps): JSX.Element | null => {
 	if (!open) {
 		return null;
 	}
+	if (typeof document === "undefined") {
+		return null;
+	}
 	return (
-		<div class="fixed inset-0 z-50">
-			<button
-				aria-label="关闭弹窗"
-				class="absolute inset-0 bg-slate-950/60"
-				type="button"
-				onClick={onClose}
-			/>
-			<div class="relative z-10 flex min-h-screen items-center justify-center px-4 py-8">
-				{children}
-			</div>
-		</div>
+		<>
+			{createPortal(
+				<div class="app-dialog-root">
+					<button
+						aria-label="关闭弹窗"
+						class="app-dialog-backdrop"
+						type="button"
+						onClick={onClose}
+					/>
+					<div class="app-dialog-frame">{children}</div>
+				</div>,
+				document.body,
+			)}
+		</>
 	);
 };
 
@@ -32,7 +43,7 @@ export const DialogContent = ({
 }: JSX.IntrinsicElements["div"]) => (
 	<div
 		{...props}
-		class={cx("app-card w-full max-w-xl p-6", className)}
+		class={cx("app-card app-dialog-content w-full max-w-xl p-6", className)}
 		role="dialog"
 	/>
 );

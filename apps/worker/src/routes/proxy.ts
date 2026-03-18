@@ -1,9 +1,7 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../env";
 import { type TokenRecord, tokenAuth } from "../middleware/tokenAuth";
-import {
-	type CallTokenItem,
-} from "../services/call-token-selector";
+import type { CallTokenItem } from "../services/call-token-selector";
 import { listCallTokens } from "../services/channel-call-token-repo";
 import {
 	type ChannelMetadata,
@@ -12,19 +10,15 @@ import {
 	resolveProvider,
 } from "../services/channel-metadata";
 import {
-	type ChannelRecord,
-	createWeightedOrder,
-	extractModels,
-} from "../services/channels";
-import {
 	listCoolingDownChannelsForModel,
 	listVerifiedModelsByChannel,
 } from "../services/channel-model-capabilities";
 import {
-	getCacheConfig,
-	getModelFailureCooldownMinutes,
-	getProxyRuntimeSettings,
-} from "../services/settings";
+	type ChannelRecord,
+	createWeightedOrder,
+	extractModels,
+} from "../services/channels";
+import { adaptChatResponse } from "../services/chat-response-adapter";
 import {
 	applyGeminiModelToPath,
 	buildUpstreamChatRequest,
@@ -42,16 +36,24 @@ import {
 	parseDownstreamModel,
 	parseDownstreamStream,
 } from "../services/provider-transform";
-import { processUsageQueueEvent, type UsageQueueEvent } from "../services/usage-queue";
+import {
+	getCacheConfig,
+	getModelFailureCooldownMinutes,
+	getProxyRuntimeSettings,
+} from "../services/settings";
 import {
 	getUsageLimiterStub,
 	reserveUsageQueue,
 } from "../services/usage-limiter";
+import {
+	processUsageQueueEvent,
+	type UsageQueueEvent,
+} from "../services/usage-queue";
+import { withJsonCache } from "../utils/cache";
 import { jsonError } from "../utils/http";
 import { safeJsonParse } from "../utils/json";
 import { extractReasoningEffort } from "../utils/reasoning";
 import { normalizeBaseUrl } from "../utils/url";
-import { withJsonCache } from "../utils/cache";
 import {
 	type NormalizedUsage,
 	parseUsageFromHeaders,
@@ -60,7 +62,6 @@ import {
 	type StreamUsageMode,
 	type StreamUsageOptions,
 } from "../utils/usage";
-import { adaptChatResponse } from "../services/chat-response-adapter";
 
 const proxy = new Hono<AppEnv>();
 
@@ -100,12 +101,10 @@ function normalizeMessage(value: string | null): string | null {
 	return trimmed;
 }
 
-function getStreamUsageOptions(
-	settings: {
-		stream_usage_mode: string;
-		stream_usage_max_bytes: number;
-	},
-): StreamUsageOptions {
+function getStreamUsageOptions(settings: {
+	stream_usage_mode: string;
+	stream_usage_max_bytes: number;
+}): StreamUsageOptions {
 	return {
 		mode: settings.stream_usage_mode as StreamUsageMode,
 		maxBytes: Math.max(0, Math.floor(settings.stream_usage_max_bytes)),
@@ -173,7 +172,7 @@ function createUsageEventScheduler(
 
 	const decideSequential = () => {
 		const decision = decisionChain.then(decide);
-		decisionChain = decision.catch(() => undefined);
+		decisionChain = decision.then(() => undefined).catch(() => undefined);
 		return decision;
 	};
 
@@ -198,7 +197,10 @@ async function extractErrorDetails(
 ): Promise<{ errorCode: string | null; errorMessage: string | null }> {
 	const contentType = response.headers.get("content-type") ?? "";
 	if (contentType.includes("application/json")) {
-		const payload = await response.clone().json().catch(() => null);
+		const payload = await response
+			.clone()
+			.json()
+			.catch(() => null);
 		if (payload && typeof payload === "object") {
 			const raw = payload as Record<string, unknown>;
 			const error = (raw.error ?? raw) as Record<string, unknown>;
@@ -220,7 +222,10 @@ async function extractErrorDetails(
 			};
 		}
 	}
-	const text = await response.clone().text().catch(() => "");
+	const text = await response
+		.clone()
+		.text()
+		.catch(() => "");
 	return { errorCode: null, errorMessage: normalizeMessage(text) };
 }
 
@@ -560,8 +565,9 @@ proxy.all("/*", tokenAuth, async (c) => {
 			enabled: cacheConfig.enabled,
 		},
 		async () => {
-			const result = await c.env.DB
-				.prepare("SELECT * FROM channels WHERE status = ?")
+			const result = await c.env.DB.prepare(
+				"SELECT * FROM channels WHERE status = ?",
+			)
 				.bind("active")
 				.all();
 			return (result.results ?? []) as ChannelRecord[];
@@ -631,12 +637,7 @@ proxy.all("/*", tokenAuth, async (c) => {
 					code: "upstream_cooldown",
 					message: "upstream_cooldown",
 				});
-				return jsonError(
-					c,
-					503,
-					"upstream_cooldown",
-					"upstream_cooldown",
-				);
+				return jsonError(c, 503, "upstream_cooldown", "upstream_cooldown");
 			}
 		}
 	}
@@ -782,10 +783,7 @@ proxy.all("/*", tokenAuth, async (c) => {
 					}
 				}
 			}
-			if (
-				endpointType === "images" &&
-				metadata.endpoint_overrides.image_url
-			) {
+			if (endpointType === "images" && metadata.endpoint_overrides.image_url) {
 				if (normalizedImage) {
 					const request = buildUpstreamImageRequest(
 						upstreamProvider,
@@ -989,7 +987,8 @@ proxy.all("/*", tokenAuth, async (c) => {
 		} catch (error) {
 			const isTimeout =
 				error instanceof Error &&
-				(error.name === "AbortError" || error.message.includes("upstream_timeout"));
+				(error.name === "AbortError" ||
+					error.message.includes("upstream_timeout"));
 			console.error("[proxy:upstream_exception]", {
 				channel_id: channel.id,
 				upstream_provider: upstreamProvider,
@@ -1085,11 +1084,11 @@ proxy.all("/*", tokenAuth, async (c) => {
 		const errorDetails =
 			lastResponse.ok || selectedChannel
 				? null
-				: lastErrorDetails ?? {
+				: (lastErrorDetails ?? {
 						upstreamStatus: lastResponse.status,
 						errorCode: null,
 						errorMessage: null,
-					};
+					});
 		const record = async (
 			usage: NormalizedUsage | null,
 			firstTokenLatencyMs?: number | null,
@@ -1105,14 +1104,14 @@ proxy.all("/*", tokenAuth, async (c) => {
 			const usageMissing = !usage;
 			const errorCode = lastResponse.ok
 				? usageMissing
-					? usageMissingReason ?? "usage_missing"
+					? (usageMissingReason ?? "usage_missing")
 					: null
-				: errorDetails?.errorCode ?? null;
+				: (errorDetails?.errorCode ?? null);
 			const errorMessage = lastResponse.ok
 				? usageMissing
-					? usageMissingReason ?? "usage_missing"
+					? (usageMissingReason ?? "usage_missing")
 					: null
-				: errorDetails?.errorMessage ?? null;
+				: (errorDetails?.errorMessage ?? null);
 			scheduleUsageEvent({
 				type: "usage",
 				payload: {
@@ -1131,7 +1130,7 @@ proxy.all("/*", tokenAuth, async (c) => {
 					status: lastResponse.ok ? "ok" : "error",
 					upstreamStatus: lastResponse.ok
 						? lastResponse.status
-						: errorDetails?.upstreamStatus ?? lastResponse.status,
+						: (errorDetails?.upstreamStatus ?? lastResponse.status),
 					errorCode,
 					errorMessage,
 				},
@@ -1167,13 +1166,15 @@ proxy.all("/*", tokenAuth, async (c) => {
 				const task = parseUsageFromSse(lastResponse.clone(), streamUsageOptions)
 					.then((streamUsage) => {
 						const usageValue = immediateUsage ?? streamUsage.usage;
-						const reason =
-							usageValue ? null : "usage_missing";
+						const reason = usageValue ? null : "usage_missing";
 						return record(usageValue, streamUsage.firstTokenLatencyMs, reason);
 					})
 					.catch(() => undefined)
 					.finally(() => {
-						activeStreamUsageParsers = Math.max(0, activeStreamUsageParsers - 1);
+						activeStreamUsageParsers = Math.max(
+							0,
+							activeStreamUsageParsers - 1,
+						);
 					});
 				if (executionCtx?.waitUntil) {
 					executionCtx.waitUntil(task);
@@ -1182,7 +1183,11 @@ proxy.all("/*", tokenAuth, async (c) => {
 				}
 			}
 		} else {
-			await record(immediateUsage, latencyMs, immediateUsage ? null : "usage_missing");
+			await record(
+				immediateUsage,
+				latencyMs,
+				immediateUsage ? null : "usage_missing",
+			);
 		}
 	}
 

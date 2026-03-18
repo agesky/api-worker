@@ -18,11 +18,7 @@ export type StreamUsageOptions = {
 	maxBytes?: number;
 };
 
-const USAGE_HINTS = [
-	"\"usage\"",
-	"\"usageMetadata\"",
-	"\"usage_metadata\"",
-];
+const USAGE_HINTS = ['"usage"', '"usageMetadata"', '"usage_metadata"'];
 
 function toNumber(value: unknown): number | null {
 	if (value === null || value === undefined) {

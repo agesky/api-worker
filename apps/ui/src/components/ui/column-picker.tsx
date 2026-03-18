@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "hono/jsx/dom";
 import { Button } from "./button";
 import { Popover, PopoverContent } from "./popover";
-import { cx, type ClassName } from "./utils";
+import { type ClassName, cx } from "./utils";
 
 export type ColumnOption = {
 	id: string;
@@ -77,7 +77,10 @@ export const ColumnPicker = ({
 				{label}
 			</Button>
 			<Popover open={open}>
-				<PopoverContent class="right-0 w-64 p-3 app-popover-content--spaced">
+				<PopoverContent
+					class="right-0 p-3 app-popover-content--spaced app-column-picker-popover"
+					style="width:176px;min-width:176px;max-width:176px;"
+				>
 					<div class="text-xs font-semibold uppercase tracking-widest text-[color:var(--app-ink-muted)]">
 						显示列
 					</div>

@@ -28,4 +28,3 @@ export type AppEnv = {
 	Bindings: Bindings;
 	Variables: Variables;
 };
-

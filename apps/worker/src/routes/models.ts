@@ -37,7 +37,10 @@ models.get("/", async (c) => {
 			>();
 			for (const entry of entries) {
 				const existing = map.get(entry.id) ?? { id: entry.id, channels: [] };
-				existing.channels.push({ id: entry.channelId, name: entry.channelName });
+				existing.channels.push({
+					id: entry.channelId,
+					name: entry.channelName,
+				});
 				map.set(entry.id, existing);
 			}
 

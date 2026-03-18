@@ -8,7 +8,7 @@ const BUN_CMD = (() => {
 		return process.env.BUN_BIN;
 	}
 	const npmExec = process.env.npm_execpath;
-	if (npmExec && npmExec.toLowerCase().includes("bun")) {
+	if (npmExec?.toLowerCase().includes("bun")) {
 		return npmExec;
 	}
 	if (process.env.BUN_INSTALL) {

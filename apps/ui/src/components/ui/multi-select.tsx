@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "hono/jsx/dom";
 import { Input } from "./input";
 import { PopoverContent } from "./popover";
-import { cx, type ClassName } from "./utils";
+import { type ClassName, cx } from "./utils";
 
 export type MultiSelectOption = {
 	value: string;
@@ -124,7 +124,10 @@ export const MultiSelect = ({
 		>
 			<button
 				aria-expanded={open}
-				class={cx("app-multi-select app-focus", open && "app-multi-select--open")}
+				class={cx(
+					"app-multi-select app-focus",
+					open && "app-multi-select--open",
+				)}
 				type="button"
 				onClick={(event) => {
 					event.stopPropagation();

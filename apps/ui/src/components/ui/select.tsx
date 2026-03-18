@@ -12,5 +12,10 @@ export const Select = ({
 }: SelectProps) => {
 	const variantClass =
 		variant === "pill" ? "app-input app-input--pill" : "app-input";
-	return <select {...props} class={cx(variantClass, "app-focus", className)} />;
+	return (
+		<select
+			{...props}
+			class={cx(variantClass, "app-select app-focus", className)}
+		/>
+	);
 };

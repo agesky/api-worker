@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "hono/jsx/dom";
-import { cx, type ClassName } from "./utils";
+import { type ClassName, cx } from "./utils";
 
 export type AreaChartPoint = {
 	label: string;
@@ -111,7 +111,10 @@ export const AreaChart = ({
 		}
 		const maxValue = Math.max(...data.map((item) => item.value), 1);
 		const drawableWidth = Math.max(1, viewBoxWidth - paddingX * 2);
-		const drawableHeight = Math.max(1, viewBoxHeight - paddingTop - paddingBottom);
+		const drawableHeight = Math.max(
+			1,
+			viewBoxHeight - paddingTop - paddingBottom,
+		);
 		return data.map((item, index) => {
 			const x =
 				data.length === 1
@@ -143,7 +146,8 @@ export const AreaChart = ({
 	const horizontalGridLines = useMemo(
 		() =>
 			[0.2, 0.4, 0.6, 0.8].map(
-				(step) => paddingTop + step * (viewBoxHeight - paddingTop - paddingBottom),
+				(step) =>
+					paddingTop + step * (viewBoxHeight - paddingTop - paddingBottom),
 			),
 		[paddingBottom, paddingTop, viewBoxHeight],
 	);

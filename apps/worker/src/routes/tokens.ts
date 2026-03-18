@@ -20,9 +20,7 @@ type TokenRow = {
 	expires_at?: string | null;
 };
 
-const normalizeAllowedChannels = (
-	raw: string | null,
-): string[] | null => {
+const normalizeAllowedChannels = (raw: string | null): string[] | null => {
 	if (!raw) {
 		return null;
 	}

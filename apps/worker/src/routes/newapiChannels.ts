@@ -20,7 +20,6 @@ import {
 	fetchChannelModels,
 	updateChannelTestResult,
 } from "../services/channel-testing";
-import { bumpCacheVersions } from "../services/settings";
 import {
 	mergeMetadata,
 	modelsToJson,
@@ -29,6 +28,7 @@ import {
 	toNewApiChannel,
 	withNewApiDefaults,
 } from "../services/newapi";
+import { bumpCacheVersions } from "../services/settings";
 import { generateToken } from "../utils/crypto";
 import { safeJsonParse } from "../utils/json";
 import { newApiFailure, newApiSuccess } from "../utils/newapi-response";

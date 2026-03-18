@@ -77,8 +77,7 @@ export class UsageLimiter {
 				return new Response("Invalid payload", { status: 400 });
 			}
 			const nowDate = beijingDateString(new Date());
-			let storedDate =
-				(await this.state.storage.get<string>(DATE_KEY)) ?? null;
+			let storedDate = (await this.state.storage.get<string>(DATE_KEY)) ?? null;
 			let count = (await this.state.storage.get<number>(COUNT_KEY)) ?? 0;
 			if (storedDate !== nowDate) {
 				storedDate = nowDate;
@@ -106,8 +105,7 @@ export class UsageLimiter {
 		}
 		if (request.method === "GET" && url.pathname === "/status") {
 			const nowDate = beijingDateString(new Date());
-			let storedDate =
-				(await this.state.storage.get<string>(DATE_KEY)) ?? null;
+			let storedDate = (await this.state.storage.get<string>(DATE_KEY)) ?? null;
 			let count = (await this.state.storage.get<number>(COUNT_KEY)) ?? 0;
 			if (storedDate !== nowDate) {
 				storedDate = nowDate;

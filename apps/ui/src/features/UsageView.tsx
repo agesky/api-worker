@@ -12,7 +12,6 @@ import {
 	Input,
 	MultiSelect,
 	Pagination,
-	Select,
 	Skeleton,
 	Tooltip,
 } from "../components/ui";
@@ -203,7 +202,7 @@ export const UsageView = ({
 
 	return (
 		<div class="space-y-5">
-			<div class="animate-fade-up space-y-4">
+			<div class="app-panel animate-fade-up space-y-4">
 				<div class="flex flex-wrap items-center justify-between gap-3">
 					<div>
 						<h3 class="app-title text-lg">使用日志</h3>
@@ -221,7 +220,10 @@ export const UsageView = ({
 						</Button>
 					</div>
 				</div>
-				<Card variant="compact" class="app-layer-raised space-y-3 p-4">
+				<Card
+					variant="compact"
+					class="app-layer-raised app-toolbar-card space-y-3 p-4"
+				>
 					<div class="flex flex-wrap items-center justify-between gap-3">
 						<div class="text-xs font-semibold uppercase tracking-widest text-[color:var(--app-ink-muted)]">
 							筛选模块
@@ -270,9 +272,9 @@ export const UsageView = ({
 							/>
 						</div>
 						<div>
-							<label class="mb-1.5 block text-xs uppercase tracking-widest text-[color:var(--app-ink-muted)]">
+							<p class="mb-1.5 block text-xs uppercase tracking-widest text-[color:var(--app-ink-muted)]">
 								渠道
-							</label>
+							</p>
 							<MultiSelect
 								class="w-full"
 								options={channelOptions}
@@ -286,9 +288,9 @@ export const UsageView = ({
 					</div>
 					<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
 						<div>
-							<label class="mb-1.5 block text-xs uppercase tracking-widest text-[color:var(--app-ink-muted)]">
+							<p class="mb-1.5 block text-xs uppercase tracking-widest text-[color:var(--app-ink-muted)]">
 								令牌
-							</label>
+							</p>
 							<MultiSelect
 								class="w-full"
 								options={tokenOptions}
@@ -300,9 +302,9 @@ export const UsageView = ({
 							/>
 						</div>
 						<div>
-							<label class="mb-1.5 block text-xs uppercase tracking-widest text-[color:var(--app-ink-muted)]">
+							<p class="mb-1.5 block text-xs uppercase tracking-widest text-[color:var(--app-ink-muted)]">
 								模型
-							</label>
+							</p>
 							<MultiSelect
 								class="w-full"
 								options={modelOptions}
@@ -314,9 +316,9 @@ export const UsageView = ({
 							/>
 						</div>
 						<div>
-							<label class="mb-1.5 block text-xs uppercase tracking-widest text-[color:var(--app-ink-muted)]">
+							<p class="mb-1.5 block text-xs uppercase tracking-widest text-[color:var(--app-ink-muted)]">
 								状态
-							</label>
+							</p>
 							<MultiSelect
 								class="w-full"
 								options={statusOptions}
@@ -351,51 +353,69 @@ export const UsageView = ({
 						</div>
 					</div>
 				</Card>
-				<div class="app-surface overflow-hidden">
+				<div class="app-surface app-data-shell overflow-hidden">
 					<div class="h-[360px] overflow-auto sm:h-[440px]">
 						<table class="app-table min-w-[960px] w-full text-xs sm:text-sm">
 							<thead>
 								<tr>
 									{visibleColumnSet.has("time") && (
-										<th class="sticky top-0 bg-slate-100/90">时间</th>
+										<th class="sticky top-0 bg-[color:var(--app-surface-strong)]/95">
+											时间
+										</th>
 									)}
 									{visibleColumnSet.has("model") && (
-										<th class="sticky top-0 bg-slate-100/90">模型</th>
+										<th class="sticky top-0 bg-[color:var(--app-surface-strong)]/95">
+											模型
+										</th>
 									)}
 									{visibleColumnSet.has("channel") && (
-										<th class="sticky top-0 bg-slate-100/90">渠道</th>
+										<th class="sticky top-0 bg-[color:var(--app-surface-strong)]/95">
+											渠道
+										</th>
 									)}
 									{visibleColumnSet.has("token") && (
-										<th class="sticky top-0 bg-slate-100/90">令牌</th>
+										<th class="sticky top-0 bg-[color:var(--app-surface-strong)]/95">
+											令牌
+										</th>
 									)}
 									{visibleColumnSet.has("prompt_tokens") && (
-										<th class="sticky top-0 bg-slate-100/90">输入 Tokens</th>
+										<th class="sticky top-0 bg-[color:var(--app-surface-strong)]/95">
+											输入 Tokens
+										</th>
 									)}
 									{visibleColumnSet.has("completion_tokens") && (
-										<th class="sticky top-0 bg-slate-100/90">输出 Tokens</th>
+										<th class="sticky top-0 bg-[color:var(--app-surface-strong)]/95">
+											输出 Tokens
+										</th>
 									)}
 									{visibleColumnSet.has("latency") && (
-										<th class="sticky top-0 bg-slate-100/90">用时 (s)</th>
+										<th class="sticky top-0 bg-[color:var(--app-surface-strong)]/95">
+											用时 (s)
+										</th>
 									)}
 									{visibleColumnSet.has("first_token") && (
-										<th class="sticky top-0 bg-slate-100/90">
+										<th class="sticky top-0 bg-[color:var(--app-surface-strong)]/95">
 											<Tooltip content="首个 token 返回的等待时间。">
 												<span>首 token 延迟 (s)</span>
 											</Tooltip>
 										</th>
 									)}
 									{visibleColumnSet.has("stream") && (
-										<th class="sticky top-0 bg-slate-100/90">流式</th>
+										<th class="sticky top-0 bg-[color:var(--app-surface-strong)]/95">
+											流式
+										</th>
 									)}
 									{visibleColumnSet.has("reasoning") && (
-										<th class="sticky top-0 bg-slate-100/90">
+										<th class="sticky top-0 bg-[color:var(--app-surface-strong)]/95">
 											<Tooltip content="模型推理强度等级。">
 												<span>推理强度</span>
 											</Tooltip>
 										</th>
 									)}
 									{visibleColumnSet.has("status") && (
-										<th class="sticky top-0 bg-slate-100/90">状态码</th>
+										<th class="sticky top-0 bg-[color:var(--app-surface-strong)]/95">
+											状态码
+										</th>
 									)}
 								</tr>
 							</thead>
@@ -489,7 +509,7 @@ export const UsageView = ({
 													</td>
 												)}
 												{visibleColumnSet.has("status") && (
-									<td class="px-3 py-2.5 text-left text-xs text-[color:var(--app-ink)] sm:text-sm">
+													<td class="px-3 py-2.5 text-left text-xs text-[color:var(--app-ink)] sm:text-sm">
 														<button
 															class="app-focus inline-flex items-center border-0 bg-transparent p-0"
 															type="button"
@@ -498,7 +518,9 @@ export const UsageView = ({
 															<Chip
 																class="text-[10px]"
 																variant={
-																	log.upstream_status === 200 ? "success" : "danger"
+																	log.upstream_status === 200
+																		? "success"
+																		: "danger"
 																}
 															>
 																{statusDetail.label}
@@ -514,7 +536,7 @@ export const UsageView = ({
 						</table>
 					</div>
 				</div>
-				<div class="flex flex-col gap-3 text-xs text-[color:var(--app-ink-muted)] sm:flex-row sm:items-center sm:justify-between">
+				<div class="app-pagination-bar flex flex-col gap-3 text-xs text-[color:var(--app-ink-muted)] sm:flex-row sm:items-center sm:justify-between">
 					<div class="flex flex-wrap items-center gap-2">
 						<span class="text-xs text-[color:var(--app-ink-muted)]">
 							共 {displayPages} 页 · {total} 条
@@ -527,27 +549,24 @@ export const UsageView = ({
 							disabled={isRefreshing}
 						/>
 					</div>
-					<label class="app-page-size" for="usage-page-size">
-						<span>每页条数</span>
-						<Select
-							variant="pill"
-							class="w-auto text-xs app-page-size__select"
-							id="usage-page-size"
-							value={String(pageSize)}
-							disabled={isRefreshing}
-							onChange={(event) =>
-								onPageSizeChange(
-									Number((event.currentTarget as HTMLSelectElement).value),
-								)
-							}
-						>
+					<div class="app-page-size-control">
+						<span class="app-page-size-control__label">每页</span>
+						<div class="app-page-size-control__chips">
 							{pageSizeOptions.map((size) => (
-								<option key={size} value={String(size)}>
+								<button
+									class={`app-page-size-chip ${
+										pageSize === size ? "app-page-size-chip--active" : ""
+									}`}
+									key={size}
+									type="button"
+									disabled={isRefreshing}
+									onClick={() => onPageSizeChange(size)}
+								>
 									{size}
-								</option>
+								</button>
 							))}
-						</Select>
-					</label>
+						</div>
+					</div>
 				</div>
 			</div>
 			{activeErrorLog ? (

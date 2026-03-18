@@ -185,7 +185,10 @@ function parsePositiveNumber(value: string | null, fallback: number): number {
 	return fallback;
 }
 
-function parseNonNegativeSetting(value: string | null, fallback: number): number {
+function parseNonNegativeSetting(
+	value: string | null,
+	fallback: number,
+): number {
 	if (!value) {
 		return fallback;
 	}
@@ -259,9 +262,7 @@ function clearCacheConfigSnapshot(): void {
 	cacheConfigSnapshot = null;
 }
 
-function setSettingsCacheControlSnapshot(
-	value: SettingsCacheControl,
-): void {
+function setSettingsCacheControlSnapshot(value: SettingsCacheControl): void {
 	settingsCacheControlSnapshot = {
 		value,
 		expiresAt: Date.now() + CACHE_CONFIG_TTL_MS,

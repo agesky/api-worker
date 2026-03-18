@@ -485,29 +485,29 @@ const App = () => {
 
 	const handleDashboardApply = useCallback(
 		async (override?: DashboardQuery) => {
-		const actionKey = buildActionKey("dashboard:filter");
-		if (isActionPending(actionKey)) {
-			return;
-		}
-		const nextQuery = override ?? dashboardQuery;
-		startAction(actionKey);
-		try {
-			await loadDashboard(nextQuery);
-			pushNotice("success", "筛选已更新");
-		} catch (error) {
-			pushNotice("error", (error as Error).message);
-		} finally {
-			endAction(actionKey);
-		}
-	},
-	[
-		dashboardQuery,
-		endAction,
-		isActionPending,
-		loadDashboard,
-		pushNotice,
-		startAction,
-	],
+			const actionKey = buildActionKey("dashboard:filter");
+			if (isActionPending(actionKey)) {
+				return;
+			}
+			const nextQuery = override ?? dashboardQuery;
+			startAction(actionKey);
+			try {
+				await loadDashboard(nextQuery);
+				pushNotice("success", "筛选已更新");
+			} catch (error) {
+				pushNotice("error", (error as Error).message);
+			} finally {
+				endAction(actionKey);
+			}
+		},
+		[
+			dashboardQuery,
+			endAction,
+			isActionPending,
+			loadDashboard,
+			pushNotice,
+			startAction,
+		],
 	);
 
 	const loadSites = useCallback(async () => {
@@ -667,16 +667,14 @@ const App = () => {
 			proxy_upstream_timeout_ms: String(
 				runtimeSettings?.upstream_timeout_ms ?? 30000,
 			),
-			proxy_stream_usage_mode:
-				runtimeSettings?.stream_usage_mode ?? "full",
+			proxy_stream_usage_mode: runtimeSettings?.stream_usage_mode ?? "full",
 			proxy_stream_usage_max_bytes: String(
 				runtimeSettings?.stream_usage_max_bytes ?? 0,
 			),
 			proxy_stream_usage_max_parsers: String(
 				runtimeSettings?.stream_usage_max_parsers ?? 0,
 			),
-			proxy_usage_queue_enabled:
-				runtimeSettings?.usage_queue_enabled ?? true,
+			proxy_usage_queue_enabled: runtimeSettings?.usage_queue_enabled ?? true,
 			usage_queue_daily_limit: String(
 				runtimeSettings?.usage_queue_daily_limit ?? 10000,
 			),
@@ -1303,17 +1301,16 @@ const App = () => {
 				settingsForm.model_failure_cooldown_minutes,
 			);
 			const upstreamTimeoutMs = Number(settingsForm.proxy_upstream_timeout_ms);
-			const streamUsageMode =
-				settingsForm.proxy_stream_usage_mode.trim().toLowerCase();
+			const streamUsageMode = settingsForm.proxy_stream_usage_mode
+				.trim()
+				.toLowerCase();
 			const streamUsageMaxBytes = Number(
 				settingsForm.proxy_stream_usage_max_bytes,
 			);
 			const streamUsageMaxParsers = Number(
 				settingsForm.proxy_stream_usage_max_parsers,
 			);
-			const usageQueueDailyLimit = Number(
-				settingsForm.usage_queue_daily_limit,
-			);
+			const usageQueueDailyLimit = Number(settingsForm.usage_queue_daily_limit);
 			const usageQueueDirectRatio = Number(
 				settingsForm.usage_queue_direct_write_ratio,
 			);
@@ -1327,9 +1324,7 @@ const App = () => {
 			const cacheCallTokensTtl = Number(
 				settingsForm.cache_ttl_call_tokens_seconds,
 			);
-			const cacheSettingsTtl = Number(
-				settingsForm.cache_ttl_settings_seconds,
-			);
+			const cacheSettingsTtl = Number(settingsForm.cache_ttl_settings_seconds);
 			if (
 				Number.isNaN(retention) ||
 				retention < 1 ||

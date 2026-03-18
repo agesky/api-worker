@@ -5,7 +5,6 @@ import {
 	ColumnPicker,
 	MultiSelect,
 	Pagination,
-	Select,
 	Table,
 	TableBody,
 	TableCell,
@@ -87,8 +86,7 @@ export const ModelsView = ({ models }: ModelsViewProps) => {
 			.sort((a, b) => a.label.localeCompare(b.label));
 	}, [models]);
 	const filteredModels = useMemo(() => {
-		const modelSet =
-			modelFilters.length > 0 ? new Set(modelFilters) : null;
+		const modelSet = modelFilters.length > 0 ? new Set(modelFilters) : null;
 		const channelSet =
 			channelFilters.length > 0 ? new Set(channelFilters) : null;
 		return models.filter((model) => {
@@ -134,9 +132,9 @@ export const ModelsView = ({ models }: ModelsViewProps) => {
 			<Card variant="compact" class="app-layer-raised space-y-3 p-4">
 				<div class="grid gap-3 sm:grid-cols-2">
 					<div>
-						<label class="mb-1.5 block text-xs uppercase tracking-widest text-[color:var(--app-ink-muted)]">
+						<p class="mb-1.5 block text-xs uppercase tracking-widest text-[color:var(--app-ink-muted)]">
 							模型
-						</label>
+						</p>
 						<MultiSelect
 							class="w-full"
 							options={modelOptions}
@@ -148,9 +146,9 @@ export const ModelsView = ({ models }: ModelsViewProps) => {
 						/>
 					</div>
 					<div>
-						<label class="mb-1.5 block text-xs uppercase tracking-widest text-[color:var(--app-ink-muted)]">
+						<p class="mb-1.5 block text-xs uppercase tracking-widest text-[color:var(--app-ink-muted)]">
 							渠道
-						</label>
+						</p>
 						<MultiSelect
 							class="w-full"
 							options={channelOptions}
@@ -190,18 +188,18 @@ export const ModelsView = ({ models }: ModelsViewProps) => {
 								</TableRow>
 							) : (
 								pagedModels.map((model) => (
-								<TableRow key={model.id}>
-									{visibleColumnSet.has("model") && (
-										<TableCell>{model.id}</TableCell>
-									)}
-									{visibleColumnSet.has("channels") && (
-										<TableCell>
-											{model.channels
-												.map((channel) => channel.name)
-												.join(" / ")}
-										</TableCell>
-									)}
-								</TableRow>
+									<TableRow key={model.id}>
+										{visibleColumnSet.has("model") && (
+											<TableCell>{model.id}</TableCell>
+										)}
+										{visibleColumnSet.has("channels") && (
+											<TableCell>
+												{model.channels
+													.map((channel) => channel.name)
+													.join(" / ")}
+											</TableCell>
+										)}
+									</TableRow>
 								))
 							)}
 						</TableBody>
@@ -209,7 +207,7 @@ export const ModelsView = ({ models }: ModelsViewProps) => {
 				</div>
 			)}
 			{models.length > 0 && (
-				<div class="flex flex-col gap-3 text-xs text-[color:var(--app-ink-muted)] sm:flex-row sm:items-center sm:justify-between">
+				<div class="app-pagination-bar flex flex-col gap-3 text-xs text-[color:var(--app-ink-muted)] sm:flex-row sm:items-center sm:justify-between">
 					<div class="flex flex-wrap items-center gap-2">
 						<span class="text-xs text-[color:var(--app-ink-muted)]">
 							共 {filteredModels.length} 条 · {totalPages} 页
@@ -221,28 +219,26 @@ export const ModelsView = ({ models }: ModelsViewProps) => {
 							onPageChange={setPage}
 						/>
 					</div>
-					<label class="app-page-size" for="model-page-size">
-						<span>每页条数</span>
-						<Select
-							variant="pill"
-							class="w-auto text-xs app-page-size__select"
-							id="model-page-size"
-							value={String(pageSize)}
-							onChange={(event) => {
-								const next = Number(
-									(event.currentTarget as HTMLSelectElement).value,
-								);
-								persistPageSizePref("pageSize:models", next);
-								setPageSize(next);
-							}}
-						>
+					<div class="app-page-size-control">
+						<span class="app-page-size-control__label">每页</span>
+						<div class="app-page-size-control__chips">
 							{pageSizeOptions.map((size) => (
-								<option key={size} value={String(size)}>
+								<button
+									class={`app-page-size-chip ${
+										pageSize === size ? "app-page-size-chip--active" : ""
+									}`}
+									key={size}
+									type="button"
+									onClick={() => {
+										persistPageSizePref("pageSize:models", size);
+										setPageSize(size);
+									}}
+								>
 									{size}
-								</option>
+								</button>
 							))}
-						</Select>
-					</label>
+						</div>
+					</div>
 				</div>
 			)}
 		</div>
