@@ -2,8 +2,61 @@
 
 ## [Unreleased]
 
+### 快速修改
+
+- **[worker/proxy]**: 删除 `chat-response-adapter` 与 `provider-transform` 中未使用的 JS 回退转换辅助函数，保留 WASM 主路径 — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: apps/worker/src/services/chat-response-adapter.ts:1-140, apps/worker/src/services/provider-transform.ts:1-170
+
+### ????
+
+- **[proxy/usage]**: ???? usage ?????? ? by lsy
+  - ??: ??????????
+  - ??: apps/worker/src/routes/proxy.ts:70-560, .helloagents/modules/proxy.md:20-40, .helloagents/modules/usage.md:10-30
+
+
+### ??
+
+- **[proxy/usage]**: ?? usage ???????????? ? by lsy
+  - ??: [202603181533_usage-event-call-fix](archive/2026-03/202603181533_usage-event-call-fix/)
+
+
+### 新增
+
+- **[deploy-workflow]**: 新增本地一键部署脚本（init/update） — by lsy
+  - 方案: [202603161914_local-deploy-script](archive/2026-03/202603161914_local-deploy-script/)
+
 ### 变更
 
+- **[settings/admin-ui]**: 设置页分区重排并内联队列状态与使用数量 — by lsy
+  - 方案: [202603181300_settings-panel-sections](archive/2026-03/202603181300_settings-panel-sections/)
+  - 决策: settings-panel-sections#D001(只读项内联展示)
+- **[settings/admin-ui]**: 运行时设置改为仅数据库生效，移除环境变量回退 — by lsy
+  - 方案: [202603181221_settings-db-only](archive/2026-03/202603181221_settings-db-only/)
+  - 决策: settings-db-only#D001(停用环境变量回退)
+- **[settings/proxy/usage/admin-ui]**: 运行时设置可在后台配置，新增队列日限额与直写比例并接入 UsageLimiter — by lsy
+  - 方案: [202603180031_usage-queue-simplified](archive/2026-03/202603180031_usage-queue-simplified/)
+- **[cache/settings/proxy/usage/admin-ui]**: 引入分组缓存与自动失效，面板/日志/模型短期缓存可配置，清理节流并补齐索引 — by lsy
+  - 方案: [202603172242_cache-strategy-optimizations](plan/202603172242_cache-strategy-optimizations/)
+- **[deploy/proxy/settings]**: 调整 stream usage 默认值并避免部署覆盖云端变量 — by lsy
+  - 方案: [202603170025_runtime-defaults-no-override](archive/2026-03/202603170025_runtime-defaults-no-override/)
+- **[admin-ui/usage]**: 使用日志渠道筛选改为搜索多选，分页条数与列偏好本地记忆 — by lsy
+  - 方案: [202603170949_shadcn-unified-ui](archive/2026-03/202603170949_shadcn-unified-ui/)
+- **[admin-ui/usage]**: 状态展示改为仅显示上游状态码并在详情弹窗展示完整错误摘要 — by lsy
+  - 方案: [202603170949_shadcn-unified-ui](archive/2026-03/202603170949_shadcn-unified-ui/)
+- **[admin-ui/usage]**: 修复使用日志多选下拉的宽度与定位 — by lsy
+  - 方案: [202603170949_shadcn-unified-ui](archive/2026-03/202603170949_shadcn-unified-ui/)
+- **[admin-ui]**: 页面布局拆分为标题/筛选/数据区，数据面板筛选条更紧凑 — by lsy
+  - 方案: [202603170949_shadcn-unified-ui](archive/2026-03/202603170949_shadcn-unified-ui/)
+- **[usage]**: 使用日志筛选支持渠道/令牌/模型/状态多选查询 — by lsy
+  - 方案: [202603170949_shadcn-unified-ui](archive/2026-03/202603170949_shadcn-unified-ui/)
+- **[deploy-workflow]**: 本地部署脚本改为纯本地流程（构建 + 本地迁移） — by lsy
+  - 方案: [202603162008_local-deploy-local-only](archive/2026-03/202603162008_local-deploy-local-only/)
+- **[settings/admin-ui]**: 设置接口返回运行时配置，管理台只读展示并指引环境变量配置
+  - 方案: [202603161748_settings-runtime-env-display](archive/2026-03/202603161748_settings-runtime-env-display/)
+- **[deploy-workflow]**: 部署流程自动创建 `usage-events` Queue（存在则跳过） — by lsy
+  - 方案: [202603161714_deploy-create-queue](archive/2026-03/202603161714_deploy-create-queue/)
+  - 决策: deploy-create-queue#D001(CI 自动创建队列)
 - **[admin-ui/dashboard]**: Dashboard 样板页引入 Apple 风主题（bento grid 卡片/表格/按钮重绘）
   - 方案: [202603152243_apple-ui-sample-dashboard](archive/2026-03/202603152243_apple-ui-sample-dashboard/)
   - 文件: apps/ui/src/features/DashboardView.tsx, apps/ui/src/styles.css, .helloagents/modules/admin-ui.md, .helloagents/modules/dashboard.md
@@ -20,6 +73,10 @@
 
 ### 微调
 
+- **[admin-ui/settings]**: 运行时配置卡片展示并内联环境变量名 — by lsy
+  - 方案: [202603162329_settings-runtime-config-cards](archive/2026-03/202603162329_settings-runtime-config-cards/)
+- **[proxy/settings]**: 流式 usage 解析上限支持 `0` 表示无限制 — by lsy
+  - 方案: [202603161849_stream-usage-unlimited](archive/2026-03/202603161849_stream-usage-unlimited/)
 - **[worker/models]**: 引入通道模型能力表并基于“模型广场测试结果+可配置TTL（默认2小时）”进行模型发布与路由匹配
   - 类型: 微调（无方案包）
   - 文件: apps/worker/migrations/0004_add_channel_model_capabilities.sql, apps/worker/src/services/channel-model-capabilities.ts, apps/worker/src/services/channel-testing.ts, apps/worker/src/services/settings.ts, apps/worker/src/routes/settings.ts, apps/worker/src/routes/models.ts, apps/worker/src/routes/newapiUsers.ts, apps/worker/src/routes/proxy.ts, tests/worker/channel-model-capabilities.test.ts, tests/worker/newapi.test.ts, helloagents/modules/settings.md, helloagents/modules/models.md, helloagents/modules/proxy.md
@@ -176,9 +233,74 @@
 
 ### 修复
 
+- **[deploy-workflow]**: 队列检查改为 Node 解析并容错非 JSON 输出 — by lsy
+  - 方案: [202603162220_deploy-queue-json-parse](archive/2026-03/202603162220_deploy-queue-json-parse/)
+  - 决策: deploy-queue-json-parse#D001(队列列表解析方式选择)
+- **[dashboard]**: 修复数据面板筛选 SQL 歧义导致的 500 错误 — by lsy
+  - 方案: [202603170949_shadcn-unified-ui](archive/2026-03/202603170949_shadcn-unified-ui/)
+- **[admin-ui/sites]**: 修复站点管理筛选区域 JSX 结构错误导致构建失败 — by lsy
+  - 方案: [202603170949_shadcn-unified-ui](archive/2026-03/202603170949_shadcn-unified-ui/)
 - **[admin-ui]**: Toast 通知固定右上并带进度条，弹窗改为全屏遮罩，筛选标题横排 — by lsy
   - 方案: [202603160049_modal-toast-search-fixes](archive/2026-03/202603160049_modal-toast-search-fixes/)
   - 决策: modal-toast-search-fixes#D001(通知统一为右上 Toast)
+
+### 快速修改
+
+- **[deploy-workflow]**: 本地部署脚本移除 .env 自动生成与加载 — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: scripts/deploy.mjs:1-292
+- **[admin-ui/settings]**: 缓存 TTL 与版本成对展示为卡片 — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: apps/ui/src/features/SettingsView.tsx:417-632
+- **[admin-ui/settings]**: 缓存版本调整为小标题展示 — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: apps/ui/src/features/SettingsView.tsx:566-584
+- **[ci]**: 队列创建失败时识别“名称已占用(11009)”并视为已存在 — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: .github/workflows/deploy.yml:263-320,416-473
+- **[ci]**: 队列创建失败时输出完整错误信息 — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: .github/workflows/deploy.yml:263-320,416-473
+- **[ci]**: 修复队列检查脚本的 heredoc 缩进导致的 YAML 解析失败 — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: .github/workflows/deploy.yml:263-316,416-469
+- **[tooling]**: dev 脚本适配 bun 可执行路径解析 — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: scripts/dev.mjs
+- **[deploy-workflow]**: 本地部署脚本适配 bun 可执行路径解析 — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: scripts/deploy.mjs
+- **[tooling]**: 将 `dev:all` 简化为 `dev` 脚本 — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: package.json, README.md
+- **[deploy-workflow]**: 缺少环境变量时 .env 优先从 .env.example 生成 — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: scripts/deploy.mjs, .helloagents/modules/deploy-workflow.md
+- **[deploy-workflow]**: .env.example 注释改为中文并补充默认代理配置 — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: .env.example
+- **[deploy-workflow]**: 本地部署脚本补充 .env 占位与 .env.example 模板 — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: scripts/deploy.mjs, .env.example, .helloagents/modules/deploy-workflow.md, README.md
+- **[deploy-workflow]**: 本地部署脚本未传参时支持交互选择 — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: scripts/deploy.mjs, README.md, .helloagents/modules/deploy-workflow.md
+- **[deploy-workflow]**: 增加本地部署脚本的 package scripts 快捷入口 — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: package.json, README.md
+- **[docs]**: README 补充系统设置的运行时环境变量说明
+  - 类型: 快速修改（无方案包）
+  - 文件: README.md
+- **[admin-ui]**: 加深弹窗遮罩并支持多条通知弹窗，使用日志表头遮罩更清晰 — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: apps/ui/src/App.tsx:129-220,1357-1510, apps/ui/src/features/AppLayout.tsx:1-195, apps/ui/src/features/SitesView.tsx:582, apps/ui/src/features/TokensView.tsx:415, apps/ui/src/features/UsageView.tsx:209-219,377, apps/ui/src/styles.css:424-440
+
+## [0.9.7] - 2026-03-16
+
+### 变更
+- **[proxy/usage]**: 引入 usage 队列异步写入与流式解析降载，增加 CPU 降载开关 — by lsy
+  - 方案: [202603161542_proxy-cpu-limit-mitigation](archive/2026-03/202603161542_proxy-cpu-limit-mitigation/)
+  - 决策: proxy-cpu-limit-mitigation#D001(用量写入异步化策略)
 
 ## [0.9.6] - 2026-03-15
 

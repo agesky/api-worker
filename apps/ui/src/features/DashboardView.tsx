@@ -1,9 +1,43 @@
-import type { DashboardData } from "../core/types";
+import { useEffect, useMemo, useState } from "hono/jsx/dom";
+import {
+	AreaChart,
+	Button,
+	Card,
+	Chip,
+	ColumnPicker,
+	Input,
+	MultiSelect,
+	Popover,
+	PopoverContent,
+	Skeleton,
+	Table,
+	TableBody,
+	TableCell,
+	TableHead,
+	TableHeader,
+	TableRow,
+	Tabs,
+	TabsContent,
+	TabsList,
+	TabsTrigger,
+} from "../components/ui";
+import { cx } from "../components/ui/utils";
+import type { DashboardData, DashboardQuery, Site, Token } from "../core/types";
+import {
+	getBeijingDateString,
+	loadColumnPrefs,
+	persistColumnPrefs,
+} from "../core/utils";
 
 type DashboardViewProps = {
 	dashboard: DashboardData | null;
 	onRefresh: () => void;
 	isRefreshing: boolean;
+	query: DashboardQuery;
+	channels: Site[];
+	tokens: Token[];
+	onQueryChange: (patch: Partial<DashboardQuery>) => void;
+	onApply: (next?: DashboardQuery) => void;
 };
 
 /**
@@ -19,43 +53,432 @@ export const DashboardView = ({
 	dashboard,
 	onRefresh,
 	isRefreshing,
+	query,
+	channels,
+	tokens,
+	onQueryChange,
+	onApply,
 }: DashboardViewProps) => {
+	const [activeRankTab, setActiveRankTab] = useState<
+		"model" | "channel" | "token"
+	>(() => {
+		if (typeof window === "undefined") {
+			return "model";
+		}
+		const stored = window.localStorage.getItem("dashboard:rankTab");
+		if (stored === "model" || stored === "channel" || stored === "token") {
+			return stored;
+		}
+		return "model";
+	});
+	const [filterOpen, setFilterOpen] = useState(false);
+	const filterRootClass = "app-dashboard-filter";
+	const [intervalOpen, setIntervalOpen] = useState(false);
+	const intervalRootClass = "app-dashboard-interval";
+	const popoverEvent = "app:popover-open";
+	const filterPopoverId = "dashboard-filter";
+	const intervalPopoverId = "dashboard-interval";
+	const [draftFilters, setDraftFilters] = useState(() => ({
+		channel_ids: query.channel_ids,
+		token_ids: query.token_ids,
+		model: query.model,
+	}));
+	const trendColumnDefaults = ["bucket", "requests", "tokens"];
+	const rankColumnDefaults = ["name", "requests", "tokens"];
+	const [trendColumns, setTrendColumns] = useState(() =>
+		loadColumnPrefs("columns:dashboard:trend", trendColumnDefaults),
+	);
+	const [rankColumns, setRankColumns] = useState(() =>
+		loadColumnPrefs("columns:dashboard:rank", rankColumnDefaults),
+	);
+	const trendColumnSet = useMemo(() => new Set(trendColumns), [trendColumns]);
+	const rankColumnSet = useMemo(() => new Set(rankColumns), [rankColumns]);
+	const trendColumnsConfig = [
+		{ id: "bucket", label: "日期", locked: true },
+		{ id: "requests", label: "请求" },
+		{ id: "tokens", label: "Tokens" },
+	];
+	const rankColumnsConfig = [
+		{ id: "name", label: "名称", locked: true },
+		{ id: "requests", label: "请求" },
+		{ id: "tokens", label: "Tokens" },
+	];
+	const intervalLabel =
+		query.interval === "week" ? "周" : query.interval === "month" ? "月" : "日";
+	const hasAdvancedFilters = Boolean(
+		query.channel_ids.length > 0 || query.token_ids.length > 0 || query.model,
+	);
+	const channelOptions = useMemo(
+		() =>
+			channels.map((channel) => ({
+				value: channel.id,
+				label: channel.name || channel.id,
+			})),
+		[channels],
+	);
+	const tokenOptions = useMemo(
+		() =>
+			tokens.map((token) => ({
+				value: token.id,
+				label: token.name || token.id,
+			})),
+		[tokens],
+	);
+	const chartData = useMemo(
+		() =>
+			(dashboard?.trend ?? []).map((row) => ({
+				label: row.bucket,
+				value: row.requests,
+				secondary: row.tokens,
+			})),
+		[dashboard?.trend],
+	);
+	const rankingData = useMemo(() => {
+		if (!dashboard) {
+			return [];
+		}
+		if (activeRankTab === "channel") {
+			return dashboard.byChannel.map((row) => ({
+				name: row.channel_name ?? "-",
+				requests: row.requests,
+				tokens: row.tokens,
+			}));
+		}
+		if (activeRankTab === "token") {
+			return dashboard.byToken.map((row) => ({
+				name: row.token_name ?? "-",
+				requests: row.requests,
+				tokens: row.tokens,
+			}));
+		}
+		return dashboard.byModel.map((row) => ({
+			name: row.model ?? "-",
+			requests: row.requests,
+			tokens: row.tokens,
+		}));
+	}, [activeRankTab, dashboard]);
+	const updateTrendColumns = (next: string[]) => {
+		setTrendColumns(next);
+		persistColumnPrefs("columns:dashboard:trend", next);
+	};
+	const updateRankColumns = (next: string[]) => {
+		setRankColumns(next);
+		persistColumnPrefs("columns:dashboard:rank", next);
+	};
+	const setPreset = (preset: DashboardQuery["preset"]) => {
+		if (preset === "all") {
+			onQueryChange({ preset, from: "", to: "" });
+			return;
+		}
+		if (preset === "custom") {
+			const today = getBeijingDateString();
+			onQueryChange({
+				preset,
+				from: query.from || today,
+				to: query.to || today,
+			});
+			return;
+		}
+		onQueryChange({ preset });
+	};
+	const handleApply = () => {
+		const nextQuery = {
+			...query,
+			channel_ids: draftFilters.channel_ids,
+			token_ids: draftFilters.token_ids,
+			model: draftFilters.model,
+		};
+		onQueryChange(nextQuery);
+		setFilterOpen(false);
+		onApply(nextQuery);
+	};
+	const handleIntervalApply = (nextInterval: DashboardQuery["interval"]) => {
+		const nextQuery = { ...query, interval: nextInterval };
+		onQueryChange(nextQuery);
+		onApply(nextQuery);
+	};
+	useEffect(() => {
+		if (typeof window === "undefined") {
+			return;
+		}
+		window.localStorage.setItem("dashboard:rankTab", activeRankTab);
+	}, [activeRankTab]);
+	useEffect(() => {
+		setDraftFilters({
+			channel_ids: query.channel_ids,
+			token_ids: query.token_ids,
+			model: query.model,
+		});
+	}, [query.channel_ids, query.model, query.token_ids]);
+	useEffect(() => {
+		if (!filterOpen) {
+			return;
+		}
+		const handlePointerDown = (event: PointerEvent) => {
+			const target = event.target as HTMLElement | null;
+			if (!target) {
+				return;
+			}
+			if (target.closest(`.${filterRootClass}`)) {
+				return;
+			}
+			setFilterOpen(false);
+		};
+		const handleKeyDown = (event: KeyboardEvent) => {
+			if (event.key === "Escape") {
+				event.preventDefault();
+				setFilterOpen(false);
+			}
+		};
+		window.addEventListener("pointerdown", handlePointerDown);
+		window.addEventListener("keydown", handleKeyDown);
+		return () => {
+			window.removeEventListener("pointerdown", handlePointerDown);
+			window.removeEventListener("keydown", handleKeyDown);
+		};
+	}, [filterOpen, filterRootClass]);
+	useEffect(() => {
+		const handlePopoverOpen = (event: Event) => {
+			const detail = (event as CustomEvent<string>).detail;
+			if (detail === intervalPopoverId) {
+				setFilterOpen(false);
+			}
+		};
+		window.addEventListener(popoverEvent, handlePopoverOpen);
+		return () => {
+			window.removeEventListener(popoverEvent, handlePopoverOpen);
+		};
+	}, [intervalPopoverId, popoverEvent]);
+	useEffect(() => {
+		if (filterOpen && intervalOpen) {
+			setIntervalOpen(false);
+		}
+	}, [filterOpen, intervalOpen]);
+	useEffect(() => {
+		if (!intervalOpen) {
+			return;
+		}
+		const handlePointerDown = (event: PointerEvent) => {
+			const target = event.target as HTMLElement | null;
+			if (!target) {
+				return;
+			}
+			if (target.closest(`.${intervalRootClass}`)) {
+				return;
+			}
+			setIntervalOpen(false);
+		};
+		const handleKeyDown = (event: KeyboardEvent) => {
+			if (event.key === "Escape") {
+				event.preventDefault();
+				setIntervalOpen(false);
+			}
+		};
+		window.addEventListener("pointerdown", handlePointerDown);
+		window.addEventListener("keydown", handleKeyDown);
+		return () => {
+			window.removeEventListener("pointerdown", handlePointerDown);
+			window.removeEventListener("keydown", handleKeyDown);
+		};
+	}, [intervalOpen, intervalRootClass]);
+	useEffect(() => {
+		const handlePopoverOpen = (event: Event) => {
+			const detail = (event as CustomEvent<string>).detail;
+			if (detail === filterPopoverId) {
+				setIntervalOpen(false);
+			}
+		};
+		window.addEventListener(popoverEvent, handlePopoverOpen);
+		return () => {
+			window.removeEventListener(popoverEvent, handlePopoverOpen);
+		};
+	}, [filterPopoverId, popoverEvent]);
+	useEffect(() => {
+		if (intervalOpen && filterOpen) {
+			setFilterOpen(false);
+		}
+	}, [filterOpen, intervalOpen]);
+
 	if (!dashboard) {
 		return (
-			<div class="animate-fade-up space-y-5">
+			<div class="app-panel animate-fade-up space-y-5">
 				<div class="flex flex-wrap items-center justify-between gap-4">
 					<div>
 						<h3 class="app-title">数据面板</h3>
 						<p class="app-subtitle">查看请求量、消耗与性能趋势。</p>
 					</div>
-					<button
-						class="app-button app-focus"
-						type="button"
-						disabled={isRefreshing}
-						onClick={onRefresh}
-					>
+					<Button type="button" disabled={isRefreshing} onClick={onRefresh}>
 						{isRefreshing ? "刷新中..." : "刷新"}
-					</button>
+					</Button>
 				</div>
-				<div class="app-card mt-6 text-center">
-					<div class="app-chip app-chip--accent">空状态</div>
-					<p class="mt-3 text-sm text-[color:var(--app-ink-muted)]">
-						暂无数据，请先产生调用或刷新面板。
-					</p>
-					<div class="mt-4 flex justify-center">
-						<button
-							class="app-button app-button-primary app-focus"
-							type="button"
-							onClick={onRefresh}
-							disabled={isRefreshing}
-						>
-							立即刷新
-						</button>
+				<Card
+					variant="compact"
+					class="app-layer-raised app-toolbar-card mt-4 flex flex-wrap items-center gap-2 p-3"
+				>
+					<div class="flex flex-wrap items-center gap-2">
+						{[
+							{ value: "all", label: "全部" },
+							{ value: "7d", label: "近 7 天" },
+							{ value: "30d", label: "近 30 天" },
+							{ value: "90d", label: "近 90 天" },
+							{ value: "1y", label: "近一年" },
+							{ value: "custom", label: "自定义" },
+						].map((preset) => (
+							<Button
+								class="h-8 px-3 text-[11px]"
+								key={preset.value}
+								size="sm"
+								type="button"
+								variant={query.preset === preset.value ? "primary" : "ghost"}
+								onClick={() =>
+									setPreset(preset.value as DashboardQuery["preset"])
+								}
+							>
+								{preset.label}
+							</Button>
+						))}
 					</div>
-				</div>
+					{query.preset === "custom" && (
+						<div class="flex flex-wrap items-center gap-2">
+							<Input
+								class="h-8 w-36 text-xs"
+								type="date"
+								value={query.from}
+								onInput={(event) =>
+									onQueryChange({
+										from: (event.currentTarget as HTMLInputElement).value,
+									})
+								}
+							/>
+							<Input
+								class="h-8 w-36 text-xs"
+								type="date"
+								value={query.to}
+								onInput={(event) =>
+									onQueryChange({
+										to: (event.currentTarget as HTMLInputElement).value,
+									})
+								}
+							/>
+						</div>
+					)}
+					<div class="flex flex-wrap items-center gap-2">
+						<div class={cx("relative", filterRootClass)}>
+							<Button
+								class="h-8 px-3 text-[11px]"
+								size="sm"
+								variant="ghost"
+								type="button"
+								onClick={(event) => {
+									event.stopPropagation();
+									setIntervalOpen(false);
+									if (!filterOpen) {
+										window.dispatchEvent(
+											new CustomEvent<string>(popoverEvent, {
+												detail: filterPopoverId,
+											}),
+										);
+									}
+									setFilterOpen((prev) => !prev);
+								}}
+							>
+								更多筛选
+							</Button>
+							<Popover open={filterOpen}>
+								<PopoverContent
+									class="right-0 p-3 app-popover-content--spaced app-dashboard-filter-popover"
+									style="width:216px;min-width:216px;max-width:216px;"
+								>
+									<div class="grid gap-2">
+										<MultiSelect
+											class="w-full"
+											options={channelOptions}
+											value={draftFilters.channel_ids}
+											placeholder="选择渠道"
+											searchPlaceholder="搜索渠道"
+											emptyLabel="暂无匹配渠道"
+											onChange={(next) =>
+												setDraftFilters((prev) => ({
+													...prev,
+													channel_ids: next,
+												}))
+											}
+										/>
+										<MultiSelect
+											class="w-full"
+											options={tokenOptions}
+											value={draftFilters.token_ids}
+											placeholder="选择令牌"
+											searchPlaceholder="搜索令牌"
+											emptyLabel="暂无匹配令牌"
+											onChange={(next) =>
+												setDraftFilters((prev) => ({
+													...prev,
+													token_ids: next,
+												}))
+											}
+										/>
+										<Input
+											class="h-8 text-xs"
+											placeholder="模型关键词"
+											value={draftFilters.model}
+											onInput={(event) =>
+												setDraftFilters((prev) => ({
+													...prev,
+													model: (event.currentTarget as HTMLInputElement)
+														.value,
+												}))
+											}
+										/>
+									</div>
+								</PopoverContent>
+							</Popover>
+						</div>
+						{hasAdvancedFilters ? <Chip variant="accent">已筛选</Chip> : null}
+						<Button
+							class="h-8 px-4 text-[11px]"
+							size="sm"
+							variant="primary"
+							type="button"
+							disabled={isRefreshing}
+							onClick={handleApply}
+						>
+							应用筛选
+						</Button>
+					</div>
+				</Card>
+				{isRefreshing ? (
+					<div class="app-grid app-grid--kpi">
+						{Array.from({ length: 4 }).map((_, index) => (
+							<Card variant="compact" key={`kpi-skeleton-${index}`}>
+								<Skeleton class="h-4 w-20" />
+								<Skeleton class="mt-3 h-7 w-24" />
+								<Skeleton class="mt-2 h-3 w-16" />
+							</Card>
+						))}
+					</div>
+				) : (
+					<Card class="mt-6 text-center">
+						<Chip variant="accent">空状态</Chip>
+						<p class="mt-3 text-sm text-[color:var(--app-ink-muted)]">
+							暂无数据，请先产生调用或刷新面板。
+						</p>
+						<div class="mt-4 flex justify-center">
+							<Button
+								variant="primary"
+								type="button"
+								onClick={onRefresh}
+								disabled={isRefreshing}
+							>
+								立即刷新
+							</Button>
+						</div>
+					</Card>
+				)}
 			</div>
 		);
 	}
+
 	const totalRequests = dashboard.summary.total_requests;
 	const totalErrors = dashboard.summary.total_errors;
 	const errorRate = dashboard.summary.total_requests
@@ -74,148 +497,391 @@ export const DashboardView = ({
 		? Math.round(dashboard.summary.total_tokens / totalRequests)
 		: 0;
 	return (
-		<div class="animate-fade-up space-y-5">
+		<div class="app-panel animate-fade-up space-y-5">
 			<div class="flex flex-wrap items-center justify-between gap-4">
 				<div>
 					<h3 class="app-title">数据面板</h3>
 					<p class="app-subtitle">快速掌握请求表现、性能与消耗概况。</p>
 				</div>
-				<button
-					class="app-button app-focus"
-					type="button"
-					disabled={isRefreshing}
-					onClick={onRefresh}
-				>
+				<Button type="button" disabled={isRefreshing} onClick={onRefresh}>
 					{isRefreshing ? "刷新中..." : "刷新"}
-				</button>
+				</Button>
 			</div>
+			<Card
+				variant="compact"
+				class="app-layer-raised app-toolbar-card flex flex-wrap items-center gap-2 p-3"
+			>
+				<div class="flex flex-wrap items-center gap-2">
+					{[
+						{ value: "all", label: "全部" },
+						{ value: "7d", label: "近 7 天" },
+						{ value: "30d", label: "近 30 天" },
+						{ value: "90d", label: "近 90 天" },
+						{ value: "1y", label: "近一年" },
+						{ value: "custom", label: "自定义" },
+					].map((preset) => (
+						<Button
+							class="h-8 px-3 text-[11px]"
+							key={preset.value}
+							size="sm"
+							type="button"
+							variant={query.preset === preset.value ? "primary" : "ghost"}
+							onClick={() =>
+								setPreset(preset.value as DashboardQuery["preset"])
+							}
+						>
+							{preset.label}
+						</Button>
+					))}
+				</div>
+				{query.preset === "custom" && (
+					<div class="flex flex-wrap items-center gap-2">
+						<Input
+							class="h-8 w-36 text-xs"
+							type="date"
+							value={query.from}
+							onInput={(event) =>
+								onQueryChange({
+									from: (event.currentTarget as HTMLInputElement).value,
+								})
+							}
+						/>
+						<Input
+							class="h-8 w-36 text-xs"
+							type="date"
+							value={query.to}
+							onInput={(event) =>
+								onQueryChange({
+									to: (event.currentTarget as HTMLInputElement).value,
+								})
+							}
+						/>
+					</div>
+				)}
+				<div class="flex flex-wrap items-center gap-2">
+					<div class={cx("relative", filterRootClass)}>
+						<Button
+							class="h-8 px-3 text-[11px]"
+							size="sm"
+							variant="ghost"
+							type="button"
+							onClick={(event) => {
+								event.stopPropagation();
+								setIntervalOpen(false);
+								if (!filterOpen) {
+									window.dispatchEvent(
+										new CustomEvent<string>(popoverEvent, {
+											detail: filterPopoverId,
+										}),
+									);
+								}
+								setFilterOpen((prev) => !prev);
+							}}
+						>
+							更多筛选
+						</Button>
+						<Popover open={filterOpen}>
+							<PopoverContent
+								class="right-0 p-3 app-popover-content--spaced app-dashboard-filter-popover"
+								style="width:216px;min-width:216px;max-width:216px;"
+							>
+								<div class="grid gap-2">
+									<MultiSelect
+										class="w-full"
+										options={channelOptions}
+										value={draftFilters.channel_ids}
+										placeholder="选择渠道"
+										searchPlaceholder="搜索渠道"
+										emptyLabel="暂无匹配渠道"
+										onChange={(next) =>
+											setDraftFilters((prev) => ({
+												...prev,
+												channel_ids: next,
+											}))
+										}
+									/>
+									<MultiSelect
+										class="w-full"
+										options={tokenOptions}
+										value={draftFilters.token_ids}
+										placeholder="选择令牌"
+										searchPlaceholder="搜索令牌"
+										emptyLabel="暂无匹配令牌"
+										onChange={(next) =>
+											setDraftFilters((prev) => ({
+												...prev,
+												token_ids: next,
+											}))
+										}
+									/>
+									<Input
+										class="h-8 text-xs"
+										placeholder="模型关键词"
+										value={draftFilters.model}
+										onInput={(event) =>
+											setDraftFilters((prev) => ({
+												...prev,
+												model: (event.currentTarget as HTMLInputElement).value,
+											}))
+										}
+									/>
+								</div>
+							</PopoverContent>
+						</Popover>
+					</div>
+					{hasAdvancedFilters ? <Chip variant="accent">已筛选</Chip> : null}
+					<Button
+						class="h-8 px-4 text-[11px]"
+						size="sm"
+						variant="primary"
+						type="button"
+						disabled={isRefreshing}
+						onClick={handleApply}
+					>
+						应用筛选
+					</Button>
+				</div>
+			</Card>
 			<div class="app-grid app-grid--kpi">
-				<div class="app-card app-card--compact">
-					<span class="app-chip">总请求</span>
+				<Card variant="compact">
+					<Chip>总请求</Chip>
 					<div class="app-kpi-value">{dashboard.summary.total_requests}</div>
 					<span class="app-kpi-meta">最近窗口</span>
-				</div>
-				<div class="app-card app-card--compact">
-					<span class="app-chip">总 Tokens</span>
+				</Card>
+				<Card variant="compact">
+					<Chip>总 Tokens</Chip>
 					<div class="app-kpi-value">{dashboard.summary.total_tokens}</div>
 					<span class="app-kpi-meta">累计消耗</span>
-				</div>
-				<div class="app-card app-card--compact">
-					<span class="app-chip">成功率</span>
+				</Card>
+				<Card variant="compact">
+					<Chip>成功率</Chip>
 					<div class="app-kpi-value">{successRate}%</div>
 					<span class="app-kpi-meta">错误率 {errorRate}%</span>
-				</div>
-				<div class="app-card app-card--compact">
-					<span class="app-chip">单次消耗</span>
+				</Card>
+				<Card variant="compact">
+					<Chip>单次消耗</Chip>
 					<div class="app-kpi-value">{avgTokensPerRequest}</div>
 					<span class="app-kpi-meta">
 						平均 {Math.round(dashboard.summary.avg_latency)}ms 延迟
 					</span>
-				</div>
+				</Card>
 			</div>
 			<div class="app-grid app-grid--split">
-				<div class="app-card">
+				<Card class="flex h-[420px] flex-col sm:h-[520px]">
 					<div class="mb-4 flex items-center justify-between">
-						<h3 class="app-title">按日趋势</h3>
+						<div>
+							<h3 class="app-title">请求趋势</h3>
+							<p class="app-subtitle">按统计颗粒观察请求量与 Tokens 变化。</p>
+						</div>
+						<div class="flex flex-wrap items-center gap-2">
+							<div class={cx("relative", intervalRootClass)}>
+								<Button
+									class="h-8 px-3 text-[11px]"
+									size="sm"
+									type="button"
+									onClick={(event) => {
+										event.stopPropagation();
+										setFilterOpen(false);
+										if (!intervalOpen) {
+											window.dispatchEvent(
+												new CustomEvent<string>(popoverEvent, {
+													detail: intervalPopoverId,
+												}),
+											);
+										}
+										setIntervalOpen((prev) => !prev);
+									}}
+								>
+									统计颗粒-{intervalLabel}
+								</Button>
+								<Popover open={intervalOpen}>
+									<PopoverContent class="right-0 p-2 app-popover-content--spaced app-interval-popover">
+										{[
+											{ value: "day", label: "按日" },
+											{ value: "week", label: "按周" },
+											{ value: "month", label: "按月" },
+										].map((option) => (
+											<button
+												class={cx(
+													"app-dropdown-item app-dropdown-item--right",
+													query.interval === option.value &&
+														"app-dropdown-item--active",
+												)}
+												key={option.value}
+												type="button"
+												onClick={() => {
+													setIntervalOpen(false);
+													handleIntervalApply(
+														option.value as DashboardQuery["interval"],
+													);
+												}}
+											>
+												<span class="text-xs font-semibold">
+													{option.label}
+												</span>
+											</button>
+										))}
+									</PopoverContent>
+								</Popover>
+							</div>
+							<ColumnPicker
+								class="app-dashboard-column-picker"
+								columns={trendColumnsConfig.map((column) =>
+									column.id === "bucket"
+										? { ...column, label: intervalLabel }
+										: column,
+								)}
+								value={trendColumns}
+								onChange={updateTrendColumns}
+							/>
+						</div>
 					</div>
-					<div class="overflow-x-auto">
-						<table class="app-table">
-							<thead>
-								<tr>
-									<th>日期</th>
-									<th>请求</th>
-									<th>Tokens</th>
-								</tr>
-							</thead>
-							<tbody>
-								{dashboard.byDay.map((row) => (
-									<tr key={row.day}>
-										<td>{row.day}</td>
-										<td>{row.requests}</td>
-										<td>{row.tokens}</td>
-									</tr>
-								))}
-							</tbody>
-						</table>
+					<div class="mt-2 flex min-h-0 flex-1 flex-col gap-4">
+						<div>
+							<AreaChart
+								data={chartData}
+								valueLabel="请求"
+								secondaryLabel="Tokens"
+							/>
+						</div>
+						<div class="min-h-0 flex-1 overflow-auto">
+							<Table>
+								<TableHeader>
+									<TableRow>
+										{trendColumnSet.has("bucket") && (
+											<TableHead>{intervalLabel}</TableHead>
+										)}
+										{trendColumnSet.has("requests") && (
+											<TableHead>请求</TableHead>
+										)}
+										{trendColumnSet.has("tokens") && (
+											<TableHead>Tokens</TableHead>
+										)}
+									</TableRow>
+								</TableHeader>
+								<TableBody>
+									{(dashboard.trend ?? []).length === 0 ? (
+										<TableRow>
+											<TableCell
+												class="px-3 py-6 text-center text-sm text-[color:var(--app-ink-muted)]"
+												colSpan={3}
+											>
+												暂无趋势数据
+											</TableCell>
+										</TableRow>
+									) : (
+										dashboard.trend.map((row) => (
+											<TableRow key={row.bucket}>
+												{trendColumnSet.has("bucket") && (
+													<TableCell>{row.bucket}</TableCell>
+												)}
+												{trendColumnSet.has("requests") && (
+													<TableCell>{row.requests}</TableCell>
+												)}
+												{trendColumnSet.has("tokens") && (
+													<TableCell>{row.tokens}</TableCell>
+												)}
+											</TableRow>
+										))
+									)}
+								</TableBody>
+							</Table>
+						</div>
 					</div>
-				</div>
-				<div class="app-card">
+				</Card>
+				<Card class="flex h-[420px] flex-col sm:h-[520px]">
 					<div class="mb-4 flex items-center justify-between">
-						<h3 class="app-title">模型排行</h3>
+						<div>
+							<h3 class="app-title">排行</h3>
+							<p class="app-subtitle">模型、渠道与令牌的 Top 表现。</p>
+						</div>
+						<ColumnPicker
+							class="app-dashboard-column-picker"
+							columns={rankColumnsConfig}
+							value={rankColumns}
+							onChange={updateRankColumns}
+						/>
 					</div>
-					<div class="overflow-x-auto">
-						<table class="app-table">
-							<thead>
-								<tr>
-									<th>模型</th>
-									<th>请求</th>
-									<th>Tokens</th>
-								</tr>
-							</thead>
-							<tbody>
-								{dashboard.byModel.map((row) => (
-									<tr key={row.model}>
-										<td>{row.model ?? "-"}</td>
-										<td>{row.requests}</td>
-										<td>{row.tokens}</td>
-									</tr>
-								))}
-							</tbody>
-						</table>
-					</div>
-				</div>
-			</div>
-			<div class="app-grid app-grid--split">
-				<div class="app-card">
-					<div class="mb-4 flex items-center justify-between">
-						<h3 class="app-title">渠道贡献</h3>
-					</div>
-					<div class="overflow-x-auto">
-						<table class="app-table">
-							<thead>
-								<tr>
-									<th>渠道</th>
-									<th>请求</th>
-									<th>Tokens</th>
-								</tr>
-							</thead>
-							<tbody>
-								{dashboard.byChannel.map((row) => (
-									<tr key={row.channel_name ?? "unknown"}>
-										<td>{row.channel_name ?? "-"}</td>
-										<td>{row.requests}</td>
-										<td>{row.tokens}</td>
-									</tr>
-								))}
-							</tbody>
-						</table>
-					</div>
-				</div>
-				<div class="app-card">
-					<div class="mb-4 flex items-center justify-between">
-						<h3 class="app-title">令牌贡献</h3>
-					</div>
-					<div class="overflow-x-auto">
-						<table class="app-table">
-							<thead>
-								<tr>
-									<th>令牌</th>
-									<th>请求</th>
-									<th>Tokens</th>
-								</tr>
-							</thead>
-							<tbody>
-								{dashboard.byToken.map((row) => (
-									<tr key={row.token_name ?? "unknown"}>
-										<td>{row.token_name ?? "-"}</td>
-										<td>{row.requests}</td>
-										<td>{row.tokens}</td>
-									</tr>
-								))}
-							</tbody>
-						</table>
-					</div>
-				</div>
+					<Tabs class="min-h-0 flex-1">
+						<TabsList class="grid grid-cols-3 gap-2">
+							<TabsTrigger
+								active={activeRankTab === "model"}
+								class="w-full"
+								type="button"
+								onClick={() => setActiveRankTab("model")}
+							>
+								模型排行
+							</TabsTrigger>
+							<TabsTrigger
+								active={activeRankTab === "channel"}
+								class="w-full"
+								type="button"
+								onClick={() => setActiveRankTab("channel")}
+							>
+								渠道排行
+							</TabsTrigger>
+							<TabsTrigger
+								active={activeRankTab === "token"}
+								class="w-full"
+								type="button"
+								onClick={() => setActiveRankTab("token")}
+							>
+								令牌排行
+							</TabsTrigger>
+						</TabsList>
+						<TabsContent class="min-h-0 flex-1">
+							<div class="h-full overflow-auto">
+								<Table>
+									<TableHeader>
+										<TableRow>
+											{rankColumnSet.has("name") && (
+												<TableHead>
+													{activeRankTab === "model"
+														? "模型"
+														: activeRankTab === "channel"
+															? "渠道"
+															: "令牌"}
+												</TableHead>
+											)}
+											{rankColumnSet.has("requests") && (
+												<TableHead>请求</TableHead>
+											)}
+											{rankColumnSet.has("tokens") && (
+												<TableHead>Tokens</TableHead>
+											)}
+										</TableRow>
+									</TableHeader>
+									<TableBody>
+										{rankingData.length === 0 ? (
+											<TableRow>
+												<TableCell
+													class="px-3 py-6 text-center text-sm text-[color:var(--app-ink-muted)]"
+													colSpan={3}
+												>
+													暂无排行数据
+												</TableCell>
+											</TableRow>
+										) : (
+											rankingData.map((row) => (
+												<TableRow key={`${activeRankTab}-${row.name}`}>
+													{rankColumnSet.has("name") && (
+														<TableCell>{row.name}</TableCell>
+													)}
+													{rankColumnSet.has("requests") && (
+														<TableCell>{row.requests}</TableCell>
+													)}
+													{rankColumnSet.has("tokens") && (
+														<TableCell>{row.tokens}</TableCell>
+													)}
+												</TableRow>
+											))
+										)}
+									</TableBody>
+								</Table>
+							</div>
+						</TabsContent>
+					</Tabs>
+				</Card>
 			</div>
 		</div>
 	);

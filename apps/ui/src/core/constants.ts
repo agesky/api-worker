@@ -1,5 +1,6 @@
 import type {
 	AdminData,
+	DashboardQuery,
 	SettingsForm,
 	SiteForm,
 	TabItem,
@@ -49,7 +50,29 @@ export const initialSettingsForm: SettingsForm = {
 	session_ttl_hours: "12",
 	admin_password: "",
 	checkin_schedule_time: "00:10",
-	model_failure_cooldown_minutes: "10",
+	proxy_model_failure_cooldown_minutes: "10",
+	proxy_model_failure_cooldown_threshold: "2",
+	proxy_upstream_timeout_ms: "30000",
+	proxy_retry_max_retries: "3",
+	proxy_stream_usage_mode: "full",
+	proxy_stream_usage_max_bytes: "0",
+	proxy_stream_usage_max_parsers: "0",
+	proxy_stream_usage_parse_timeout_ms: "20000",
+	proxy_responses_affinity_ttl_seconds: "86400",
+	proxy_stream_options_capability_ttl_seconds: "604800",
+	proxy_usage_queue_enabled: true,
+	usage_queue_daily_limit: "10000",
+	usage_queue_direct_write_ratio: "0.5",
+};
+
+export const initialDashboardQuery: DashboardQuery = {
+	preset: "all",
+	interval: "month",
+	from: "",
+	to: "",
+	channel_ids: [],
+	token_ids: [],
+	model: "",
 };
 
 export const initialTokenForm: TokenForm = {

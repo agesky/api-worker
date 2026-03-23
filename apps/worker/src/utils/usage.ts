@@ -1,3 +1,8 @@
+import {
+	normalizeUsageViaWasm,
+	parseUsageFromJsonViaWasm,
+	parseUsageFromSseLineViaWasm,
+} from "../wasm/core";
 import { safeJsonParse } from "./json";
 
 export type NormalizedUsage = {
@@ -9,7 +14,59 @@ export type NormalizedUsage = {
 export type StreamUsage = {
 	usage: NormalizedUsage | null;
 	firstTokenLatencyMs: number | null;
+	timedOut?: boolean;
 };
+
+export type StreamUsageMode = "full" | "lite" | "off";
+
+export type StreamUsageOptions = {
+	mode?: StreamUsageMode;
+	maxBytes?: number;
+	timeoutMs?: number;
+};
+
+export type StreamUsageParseErrorCode =
+	| "usage_stream_reader_failed"
+	| "usage_sse_line_parse_failed"
+	| "usage_sse_tail_parse_failed";
+
+export class StreamUsageParseError extends Error {
+	code: StreamUsageParseErrorCode;
+	detail: string | null;
+
+	constructor(code: StreamUsageParseErrorCode, detail?: string | null) {
+		super(code);
+		this.name = "StreamUsageParseError";
+		this.code = code;
+		this.detail = detail ?? null;
+	}
+}
+
+const USAGE_HINTS = ['"usage"', '"usageMetadata"', '"usage_metadata"'];
+
+function normalizeErrorDetail(error: unknown): string | null {
+	if (error instanceof Error) {
+		const text = error.message.trim();
+		return text.length > 0 ? text : error.name;
+	}
+	if (typeof error === "string") {
+		const text = error.trim();
+		return text.length > 0 ? text : null;
+	}
+	return null;
+}
+
+function isAbortLikeError(error: unknown): boolean {
+	if (!(error instanceof Error)) {
+		return false;
+	}
+	const message = error.message.toLowerCase();
+	return (
+		error.name === "AbortError" ||
+		message.includes("abort") ||
+		message.includes("cancel")
+	);
+}
 
 function toNumber(value: unknown): number | null {
 	if (value === null || value === undefined) {
@@ -30,84 +87,11 @@ function pickNumber(...values: Array<unknown>): number | null {
 }
 
 export function normalizeUsage(raw: unknown): NormalizedUsage | null {
-	if (!raw || typeof raw !== "object") {
-		return null;
-	}
-	const data = raw as Record<string, unknown>;
-	const promptTokens = pickNumber(
-		data.prompt_tokens,
-		data.promptTokens,
-		data.input_tokens,
-		data.inputTokens,
-	);
-	const completionTokens = pickNumber(
-		data.completion_tokens,
-		data.completionTokens,
-		data.output_tokens,
-		data.outputTokens,
-	);
-	let totalTokens = pickNumber(
-		data.total_tokens,
-		data.totalTokens,
-		data.total,
-		data.tokens,
-		data.token_count,
-	);
-	if (
-		totalTokens === null &&
-		(promptTokens !== null || completionTokens !== null)
-	) {
-		totalTokens = (promptTokens ?? 0) + (completionTokens ?? 0);
-	}
-	if (totalTokens === null) {
-		return null;
-	}
-	return {
-		totalTokens,
-		promptTokens: promptTokens ?? 0,
-		completionTokens: completionTokens ?? 0,
-	};
+	return normalizeUsageViaWasm(raw);
 }
 
 export function parseUsageFromJson(payload: unknown): NormalizedUsage | null {
-	if (!payload || typeof payload !== "object") {
-		return null;
-	}
-	const data = payload as Record<string, unknown>;
-	const usage =
-		data.usage ??
-		(data.response && typeof data.response === "object"
-			? (data.response as Record<string, unknown>).usage
-			: null) ??
-		(data.data && typeof data.data === "object"
-			? (data.data as Record<string, unknown>).usage
-			: null) ??
-		(data.message && typeof data.message === "object"
-			? (data.message as Record<string, unknown>).usage
-			: null);
-	const normalizedUsage = normalizeUsage(usage);
-	if (normalizedUsage) {
-		return normalizedUsage;
-	}
-	const usageMetadata =
-		data.usageMetadata ??
-		data.usage_metadata ??
-		(data.response && typeof data.response === "object"
-			? (data.response as Record<string, unknown>).usageMetadata
-			: null);
-	if (!usageMetadata || typeof usageMetadata !== "object") {
-		return null;
-	}
-	const record = usageMetadata as Record<string, unknown>;
-	const mapped = {
-		prompt_tokens: record.promptTokenCount ?? record.prompt_tokens,
-		completion_tokens:
-			record.candidatesTokenCount ??
-			record.completionTokenCount ??
-			record.output_tokens,
-		total_tokens: record.totalTokenCount ?? record.total_tokens,
-	};
-	return normalizeUsage(mapped);
+	return parseUsageFromJsonViaWasm(payload);
 }
 
 export function parseUsageFromHeaders(
@@ -152,20 +136,66 @@ export function parseUsageFromHeaders(
 
 export async function parseUsageFromSse(
 	response: Response,
+	options: StreamUsageOptions = {},
 ): Promise<StreamUsage> {
 	if (!response.body) {
-		return { usage: null, firstTokenLatencyMs: null };
+		return { usage: null, firstTokenLatencyMs: null, timedOut: false };
 	}
+	const mode: StreamUsageMode = options.mode ?? "full";
+	if (mode === "off") {
+		return { usage: null, firstTokenLatencyMs: null, timedOut: false };
+	}
+	const maxBytes =
+		typeof options.maxBytes === "number" && options.maxBytes > 0
+			? options.maxBytes
+			: Number.POSITIVE_INFINITY;
 	const reader = response.body.getReader();
+	const timeoutMs =
+		typeof options.timeoutMs === "number" && options.timeoutMs > 0
+			? Math.floor(options.timeoutMs)
+			: 0;
+	let timedOut = false;
+	let timeoutId: ReturnType<typeof setTimeout> | null = null;
+	if (timeoutMs > 0) {
+		timeoutId = setTimeout(() => {
+			timedOut = true;
+			reader.cancel().catch(() => undefined);
+		}, timeoutMs);
+	}
 	const decoder = new TextDecoder();
 	let buffer = "";
 	let usage: NormalizedUsage | null = null;
 	const start = Date.now();
 	let firstTokenLatencyMs: number | null = null;
+	let bytesRead = 0;
+
+	const payloadMayContainUsage = (payload: string): boolean => {
+		if (!payload) {
+			return false;
+		}
+		return USAGE_HINTS.some((hint) => payload.includes(hint));
+	};
 
 	while (true) {
-		const { done, value } = await reader.read();
+		let chunk: ReadableStreamReadResult<Uint8Array>;
+		try {
+			chunk = await reader.read();
+		} catch (error) {
+			if (timedOut || isAbortLikeError(error)) {
+				break;
+			}
+			throw new StreamUsageParseError(
+				"usage_stream_reader_failed",
+				normalizeErrorDetail(error),
+			);
+		}
+		const { done, value } = chunk;
 		if (done) {
+			break;
+		}
+		bytesRead += value?.byteLength ?? 0;
+		if (bytesRead > maxBytes) {
+			await reader.cancel();
 			break;
 		}
 		buffer += decoder.decode(value, { stream: true });
@@ -179,10 +209,30 @@ export async function parseUsageFromSse(
 					if (firstTokenLatencyMs === null) {
 						firstTokenLatencyMs = Date.now() - start;
 					}
-					const parsed = safeJsonParse<unknown>(payload, null);
-					const candidate = parseUsageFromJson(parsed);
-					if (candidate) {
-						usage = candidate;
+					if (mode === "lite" && !payloadMayContainUsage(payload)) {
+						newlineIndex = buffer.indexOf("\n");
+						continue;
+					}
+					let wasmCandidate: NormalizedUsage | null = null;
+					try {
+						wasmCandidate = parseUsageFromSseLineViaWasm(line);
+					} catch (error) {
+						throw new StreamUsageParseError(
+							"usage_sse_line_parse_failed",
+							normalizeErrorDetail(error),
+						);
+					}
+					if (wasmCandidate) {
+						usage = wasmCandidate;
+						if (mode === "lite") {
+							await reader.cancel();
+							if (timeoutId) {
+								clearTimeout(timeoutId);
+							}
+							return { usage, firstTokenLatencyMs, timedOut };
+						}
+						newlineIndex = buffer.indexOf("\n");
+						continue;
 					}
 				}
 			}
@@ -197,13 +247,30 @@ export async function parseUsageFromSse(
 			if (firstTokenLatencyMs === null) {
 				firstTokenLatencyMs = Date.now() - start;
 			}
-			const parsed = safeJsonParse<unknown>(payload, null);
-			const candidate = parseUsageFromJson(parsed);
-			if (candidate) {
-				usage = candidate;
+			if (mode === "lite" && !payloadMayContainUsage(payload)) {
+				return { usage, firstTokenLatencyMs, timedOut };
+			}
+			let wasmCandidate: NormalizedUsage | null = null;
+			try {
+				wasmCandidate = parseUsageFromSseLineViaWasm(remaining);
+			} catch (error) {
+				throw new StreamUsageParseError(
+					"usage_sse_tail_parse_failed",
+					normalizeErrorDetail(error),
+				);
+			}
+			if (wasmCandidate) {
+				usage = wasmCandidate;
+				if (timeoutId) {
+					clearTimeout(timeoutId);
+				}
+				return { usage, firstTokenLatencyMs, timedOut };
 			}
 		}
 	}
 
-	return { usage, firstTokenLatencyMs };
+	if (timeoutId) {
+		clearTimeout(timeoutId);
+	}
+	return { usage, firstTokenLatencyMs, timedOut };
 }

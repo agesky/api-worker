@@ -13,6 +13,7 @@ import { getCheckinScheduleTime } from "./settings";
 
 const SCHEDULER_NAME = "checkin-scheduler";
 const LAST_RUN_DATE_KEY = "last_run_date";
+const INTERNAL_IMMEDIATE_RESCHEDULE_DELAY_MS = 1000;
 
 export const getCheckinSchedulerStub = (namespace: DurableObjectNamespace) =>
 	namespace.get(namespace.idFromName(SCHEDULER_NAME));
@@ -37,13 +38,15 @@ export const computeNextAlarmAt = (
 	now: Date,
 	scheduleTime: string,
 	reset: boolean,
+	immediateDelayMs = INTERNAL_IMMEDIATE_RESCHEDULE_DELAY_MS,
 ) => {
 	if (!reset) {
 		return computeNextBeijingRun(now, scheduleTime);
 	}
 	const scheduledAt = computeBeijingScheduleTime(now, scheduleTime);
 	if (now.getTime() >= scheduledAt.getTime()) {
-		return new Date(now.getTime() + 1000);
+		const delay = Math.max(0, Math.floor(immediateDelayMs));
+		return new Date(now.getTime() + delay);
 	}
 	return scheduledAt;
 };

@@ -11,7 +11,8 @@ import {
 	listChannels,
 	updateChannel,
 } from "../services/channel-repo";
-import { runCheckinAll } from "../services/checkin-runner";
+import { runCheckinAll, runCheckinSingle } from "../services/checkin-runner";
+import { bumpCacheVersions } from "../services/settings";
 import {
 	buildSiteMetadata,
 	parseSiteMetadata,
@@ -313,6 +314,11 @@ sites.post("/", async (c) => {
 		toCallTokenRows(id, callTokens, now),
 	);
 
+	await bumpCacheVersions(
+		c.env.DB,
+		["channels", "models", "call_tokens"],
+		c.env.CACHE_VERSION_STORE,
+	);
 	return c.json({ id });
 });
 
@@ -414,12 +420,22 @@ sites.patch("/:id", async (c) => {
 		);
 	}
 
+	await bumpCacheVersions(
+		c.env.DB,
+		["channels", "models", "call_tokens"],
+		c.env.CACHE_VERSION_STORE,
+	);
 	return c.json({ ok: true });
 });
 
 sites.delete("/:id", async (c) => {
 	const id = c.req.param("id");
 	await deleteChannel(c.env.DB, id);
+	await bumpCacheVersions(
+		c.env.DB,
+		["channels", "models", "call_tokens"],
+		c.env.CACHE_VERSION_STORE,
+	);
 	return c.json({ ok: true });
 });
 
@@ -428,6 +444,18 @@ sites.post("/checkin-all", async (c) => {
 	return c.json({
 		results: result.results,
 		summary: result.summary,
+		runs_at: result.runsAt,
+	});
+});
+
+sites.post("/:id/checkin", async (c) => {
+	const id = c.req.param("id");
+	const result = await runCheckinSingle(c.env.DB, id, new Date());
+	if (!result) {
+		return jsonError(c, 404, "site_not_found", "site_not_found");
+	}
+	return c.json({
+		result: result.result,
 		runs_at: result.runsAt,
 	});
 });

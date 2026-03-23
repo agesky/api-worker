@@ -65,14 +65,20 @@ export type UsageLog = {
 	upstream_status?: number | null;
 	error_code?: string | null;
 	error_message?: string | null;
+	failure_stage?: string | null;
+	failure_reason?: string | null;
+	usage_source?: string | null;
+	error_meta_json?: string | null;
 	created_at: string;
 };
 
 export type UsageQuery = {
-	channel: string;
-	token: string;
-	model: string;
-	status: string;
+	channel_ids: string[];
+	token_ids: string[];
+	models: string[];
+	statuses: string[];
+	from: string;
+	to: string;
 };
 
 export type UsageResponse = {
@@ -89,10 +95,29 @@ export type DashboardData = {
 		avg_latency: number;
 		total_errors: number;
 	};
-	byDay: Array<{ day: string; requests: number; tokens: number }>;
+	interval: "day" | "week" | "month";
+	trend: Array<{ bucket: string; requests: number; tokens: number }>;
 	byModel: Array<{ model: string; requests: number; tokens: number }>;
 	byChannel: Array<{ channel_name: string; requests: number; tokens: number }>;
 	byToken: Array<{ token_name: string; requests: number; tokens: number }>;
+};
+
+export type DashboardRangePreset =
+	| "all"
+	| "7d"
+	| "30d"
+	| "90d"
+	| "1y"
+	| "custom";
+
+export type DashboardQuery = {
+	preset: DashboardRangePreset;
+	interval: "day" | "week" | "month";
+	from: string;
+	to: string;
+	channel_ids: string[];
+	token_ids: string[];
+	model: string;
 };
 
 export type Settings = {
@@ -100,7 +125,53 @@ export type Settings = {
 	session_ttl_hours: number;
 	admin_password_set?: boolean;
 	checkin_schedule_time?: string;
-	model_failure_cooldown_minutes?: number;
+	proxy_model_failure_cooldown_minutes?: number;
+	proxy_model_failure_cooldown_threshold?: number;
+	runtime_settings?: RuntimeProxySettings;
+	runtime_config?: RuntimeProxyConfig;
+	usage_queue_status?: UsageQueueStatus | null;
+};
+
+export type RuntimeProxySettings = {
+	upstream_timeout_ms: number;
+	retry_max_retries: number;
+	model_failure_cooldown_minutes: number;
+	model_failure_cooldown_threshold: number;
+	stream_usage_mode: string;
+	stream_usage_max_bytes: number;
+	stream_usage_max_parsers: number;
+	stream_usage_parse_timeout_ms: number;
+	responses_affinity_ttl_seconds: number;
+	stream_options_capability_ttl_seconds: number;
+	usage_queue_enabled: boolean;
+	usage_queue_daily_limit: number;
+	usage_queue_direct_write_ratio: number;
+};
+
+export type RuntimeProxyConfig = RuntimeProxySettings & {
+	usage_queue_bound: boolean;
+	usage_queue_active: boolean;
+};
+
+export type UsageQueueStatus = {
+	count: number | null;
+	date: string | null;
+	limit: number;
+	enabled: boolean;
+	bound: boolean;
+	active: boolean;
+	reserved_count: number | null;
+	enqueue_success_count: number | null;
+	direct_count: number | null;
+	fallback_direct_count: number | null;
+	reserve_failed_count: number | null;
+	reserve_over_limit_count: number | null;
+	queue_send_failed_count: number | null;
+	target_queue_ratio: number;
+	target_direct_ratio: number;
+	effective_queue_ratio: number | null;
+	effective_direct_ratio: number | null;
+	effective_total_count: number | null;
 };
 
 export type ModelChannel = {
@@ -159,7 +230,19 @@ export type SettingsForm = {
 	session_ttl_hours: string;
 	admin_password: string;
 	checkin_schedule_time: string;
-	model_failure_cooldown_minutes: string;
+	proxy_model_failure_cooldown_minutes: string;
+	proxy_model_failure_cooldown_threshold: string;
+	proxy_upstream_timeout_ms: string;
+	proxy_retry_max_retries: string;
+	proxy_stream_usage_mode: string;
+	proxy_stream_usage_max_bytes: string;
+	proxy_stream_usage_max_parsers: string;
+	proxy_stream_usage_parse_timeout_ms: string;
+	proxy_responses_affinity_ttl_seconds: string;
+	proxy_stream_options_capability_ttl_seconds: string;
+	proxy_usage_queue_enabled: boolean;
+	usage_queue_daily_limit: string;
+	usage_queue_direct_write_ratio: string;
 };
 
 export type TokenForm = {

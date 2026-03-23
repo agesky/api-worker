@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../env";
+import { bumpCacheVersions } from "../services/settings";
 import { generateToken, sha256Hex } from "../utils/crypto";
 import { jsonError } from "../utils/http";
 import { safeJsonParse } from "../utils/json";
@@ -19,9 +20,7 @@ type TokenRow = {
 	expires_at?: string | null;
 };
 
-const normalizeAllowedChannels = (
-	raw: string | null,
-): string[] | null => {
+const normalizeAllowedChannels = (raw: string | null): string[] | null => {
 	if (!raw) {
 		return null;
 	}
@@ -61,7 +60,7 @@ const normalizeExpiresAt = (
 tokens.get("/", async (c) => {
 	const result = await c.env.DB.prepare(
 		"SELECT id, name, key_prefix, quota_total, quota_used, status, allowed_channels, expires_at, created_at, updated_at FROM tokens ORDER BY created_at DESC",
-	).all();
+	).all<TokenRow>();
 	const tokens = (result.results ?? []).map((row) => ({
 		...row,
 		allowed_channels: normalizeAllowedChannels(row.allowed_channels ?? null),
@@ -111,6 +110,7 @@ tokens.post("/", async (c) => {
 		)
 		.run();
 
+	await bumpCacheVersions(c.env.DB, ["tokens"], c.env.CACHE_VERSION_STORE);
 	return c.json({
 		id,
 		token: rawToken,
@@ -167,6 +167,7 @@ tokens.patch("/:id", async (c) => {
 		)
 		.run();
 
+	await bumpCacheVersions(c.env.DB, ["tokens"], c.env.CACHE_VERSION_STORE);
 	return c.json({ ok: true });
 });
 
@@ -192,6 +193,7 @@ tokens.get("/:id/reveal", async (c) => {
 tokens.delete("/:id", async (c) => {
 	const id = c.req.param("id");
 	await c.env.DB.prepare("DELETE FROM tokens WHERE id = ?").bind(id).run();
+	await bumpCacheVersions(c.env.DB, ["tokens"], c.env.CACHE_VERSION_STORE);
 	return c.json({ ok: true });
 });
 

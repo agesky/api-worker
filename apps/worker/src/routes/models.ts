@@ -2,6 +2,8 @@ import { Hono } from "hono";
 import type { AppEnv } from "../env";
 import { listModelEntriesWithFallback } from "../services/channel-model-capabilities";
 import { listActiveChannels } from "../services/channel-repo";
+import { buildModelsIndexKey, readHotJson, writeHotJson } from "../services/hot-kv";
+import { getCacheConfig } from "../services/settings";
 
 const models = new Hono<AppEnv>();
 
@@ -9,9 +11,19 @@ const models = new Hono<AppEnv>();
  * Returns aggregated models from all channels.
  */
 models.get("/", async (c) => {
-	const channels = await listActiveChannels(c.env.DB);
+	const db = c.env.DB;
+	const cacheConfig = await getCacheConfig(db, c.env.CACHE_VERSION_STORE);
+	const cacheKey = buildModelsIndexKey(cacheConfig.version_models);
+	const cached = await readHotJson<{
+		models: Array<{ id: string; channels: Array<{ id: string; name: string }> }>;
+	}>(c.env.KV_HOT, cacheKey);
+	if (cached && Array.isArray(cached.models)) {
+		return c.json(cached);
+	}
+
+	const channels = await listActiveChannels(db);
 	const entries = await listModelEntriesWithFallback(
-		c.env.DB,
+		db,
 		channels.map((channel) => ({
 			id: channel.id,
 			name: channel.name,
@@ -25,13 +37,18 @@ models.get("/", async (c) => {
 	>();
 	for (const entry of entries) {
 		const existing = map.get(entry.id) ?? { id: entry.id, channels: [] };
-		existing.channels.push({ id: entry.channelId, name: entry.channelName });
+		existing.channels.push({
+			id: entry.channelId,
+			name: entry.channelName,
+		});
 		map.set(entry.id, existing);
 	}
 
-	return c.json({
+	const payload = {
 		models: Array.from(map.values()),
-	});
+	};
+	void writeHotJson(c.env.KV_HOT, cacheKey, payload, 120);
+	return c.json(payload);
 });
 
 export default models;

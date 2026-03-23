@@ -1,7 +1,7 @@
 import type { D1Database } from "@cloudflare/workers-types";
 import { nowIso } from "../utils/time";
-import { extractModelIds } from "./channel-models";
 import type { ModelEntry } from "./channel-models";
+import { extractModelIds } from "./channel-models";
 
 export type CapabilityRow = {
 	channel_id: string;
@@ -51,7 +51,9 @@ export async function listVerifiedModelEntries(
 	channels: Array<{ id: string; name: string }>,
 ): Promise<ModelEntry[]> {
 	const ids = channels.map((channel) => channel.id);
-	const nameMap = new Map(channels.map((channel) => [channel.id, channel.name]));
+	const nameMap = new Map(
+		channels.map((channel) => [channel.id, channel.name]),
+	);
 	const map = await listVerifiedModelsByChannel(db, ids);
 	const entries: ModelEntry[] = [];
 	for (const [channelId, models] of map.entries()) {
@@ -96,7 +98,12 @@ export async function listModelEntriesWithFallback(
 			continue;
 		}
 		for (const id of models) {
-			entries.push({ id, label: id, channelId: channel.id, channelName: channel.name });
+			entries.push({
+				id,
+				label: id,
+				channelId: channel.id,
+				channelName: channel.name,
+			});
 		}
 	}
 	return entries;
@@ -153,14 +160,7 @@ export async function recordChannelModelError(
 		.prepare(
 			"INSERT INTO channel_model_capabilities (channel_id, model, last_ok_at, last_err_at, last_err_code, last_err_count, created_at, updated_at) VALUES (?, ?, 0, ?, ?, 1, ?, ?) ON CONFLICT(channel_id, model) DO UPDATE SET last_err_at = excluded.last_err_at, last_err_code = excluded.last_err_code, last_err_count = COALESCE(channel_model_capabilities.last_err_count, 0) + 1, updated_at = excluded.updated_at",
 		)
-		.bind(
-			channelId,
-			model,
-			nowSeconds,
-			errorCode,
-			timestamp,
-			timestamp,
-		)
+		.bind(channelId, model, nowSeconds, errorCode, timestamp, timestamp)
 		.run();
 }
 

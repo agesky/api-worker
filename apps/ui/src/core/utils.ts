@@ -162,16 +162,76 @@ export const buildPageItems = (current: number, total: number): PageItem[] => {
 
 export type UsageStatusDetail = {
 	label: string;
-	tone: "success" | "error";
 };
 
 export const buildUsageStatusDetail = (log: UsageLog): UsageStatusDetail => {
 	const statusCode = log.upstream_status ?? null;
-	const isOk = log.status === "ok";
-	const label =
-		statusCode !== null && statusCode !== undefined ? String(statusCode) : "-";
+	if (statusCode !== null && statusCode !== undefined) {
+		return {
+			label: String(statusCode),
+		};
+	}
 	return {
-		label,
-		tone: isOk ? "success" : "error",
+		label: "未知",
 	};
+};
+
+export const loadColumnPrefs = (
+	storageKey: string,
+	defaults: string[],
+): string[] => {
+	if (typeof window === "undefined") {
+		return defaults;
+	}
+	try {
+		const raw = window.localStorage.getItem(storageKey);
+		if (!raw) {
+			return defaults;
+		}
+		const parsed = JSON.parse(raw);
+		if (!Array.isArray(parsed)) {
+			return defaults;
+		}
+		const set = new Set(parsed.filter((item) => typeof item === "string"));
+		const ordered = defaults.filter((id) => set.has(id));
+		return ordered.length > 0 ? ordered : defaults;
+	} catch (_error) {
+		return defaults;
+	}
+};
+
+export const persistColumnPrefs = (storageKey: string, next: string[]) => {
+	if (typeof window === "undefined") {
+		return;
+	}
+	window.localStorage.setItem(storageKey, JSON.stringify(next));
+};
+
+export const loadPageSizePref = (
+	storageKey: string,
+	fallback: number,
+): number => {
+	if (typeof window === "undefined") {
+		return fallback;
+	}
+	try {
+		const raw = window.localStorage.getItem(storageKey);
+		if (!raw) {
+			return fallback;
+		}
+		const value = Number(raw);
+		if (Number.isNaN(value) || value <= 0) {
+			return fallback;
+		}
+		return value;
+	} catch (_error) {
+		return fallback;
+	}
+};
+
+export const persistPageSizePref = (storageKey: string, value: number) => {
+	if (typeof window === "undefined") {
+		return;
+	}
+	window.localStorage.setItem(storageKey, String(value));
 };

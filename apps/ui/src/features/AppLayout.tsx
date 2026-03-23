@@ -1,3 +1,12 @@
+import {
+	Badge,
+	Button,
+	Chip,
+	Toast,
+	ToastProgress,
+	ToastTitle,
+	ToastViewport,
+} from "../components/ui";
 import type { NoticeMessage, TabId, TabItem } from "../core/types";
 
 type AppLayoutProps = {
@@ -5,8 +14,8 @@ type AppLayoutProps = {
 	activeTab: TabId;
 	activeLabel: string;
 	token: string | null;
-	notice: NoticeMessage | null;
-	onDismissNotice: () => void;
+	notices: NoticeMessage[];
+	onDismissNotice: (id: number) => void;
 	onTabChange: (tabId: TabId) => void;
 	onLogout: () => void;
 	children?: unknown;
@@ -26,7 +35,7 @@ export const AppLayout = ({
 	activeTab,
 	activeLabel,
 	token,
-	notice,
+	notices,
 	onDismissNotice,
 	onTabChange,
 	onLogout,
@@ -44,7 +53,6 @@ export const AppLayout = ({
 		error: "错误",
 		info: "信息",
 	};
-	const noticeDuration = notice?.durationMs ?? 4500;
 	const closeMobileNav = () => {
 		const toggle = document.querySelector<HTMLInputElement>("#app-nav-toggle");
 		if (toggle) {
@@ -59,14 +67,15 @@ export const AppLayout = ({
 	};
 
 	return (
-		<div class="relative flex min-h-screen flex-col lg:grid lg:grid-cols-[260px_1fr]">
+		<div class="relative flex min-h-screen flex-col lg:grid lg:grid-cols-[300px_1fr]">
 			<input class="peer hidden" id="app-nav-toggle" type="checkbox" />
 			<header class="app-bar flex items-center justify-between px-4 py-4 lg:hidden">
 				<div class="flex items-center gap-3">
-					<button
+					<Button
 						aria-controls="app-nav-toggle"
 						aria-label="打开导航"
-						class="app-button app-focus inline-flex h-10 items-center gap-2 px-3 text-xs"
+						class="inline-flex h-10 items-center gap-2 px-3 text-xs"
+						size="sm"
 						type="button"
 						onClick={toggleMobileNav}
 					>
@@ -95,7 +104,7 @@ export const AppLayout = ({
 							/>
 						</svg>
 						菜单
-					</button>
+					</Button>
 					<div class="flex flex-col">
 						<span class="text-sm font-semibold text-[color:var(--app-ink)]">
 							api-workers
@@ -106,24 +115,28 @@ export const AppLayout = ({
 					</div>
 				</div>
 				<div class="flex items-center gap-2">
-					<span class="app-badge text-[10px] uppercase tracking-widest">
+					<Badge class="text-[10px] uppercase tracking-widest" variant="muted">
 						{token ? "已登录" : "未登录"}
-					</span>
-					<button
-						class="app-button app-button-ghost app-focus h-9 px-3 text-xs"
+					</Badge>
+					<Button
+						class="h-9 px-3 text-xs"
+						size="sm"
+						variant="ghost"
 						type="button"
 						onClick={onLogout}
 					>
 						退出
-					</button>
+					</Button>
 				</div>
 			</header>
-			<aside class="app-sidebar fixed inset-y-0 left-0 z-40 flex w-72 -translate-x-full flex-col overflow-y-auto px-5 py-8 shadow-xl transition-transform duration-300 ease-in-out peer-checked:translate-x-0 lg:sticky lg:top-0 lg:z-auto lg:h-screen lg:w-auto lg:translate-x-0 lg:shadow-none">
-				<div class="mb-8 flex flex-col gap-1.5">
-					<h2 class="app-title text-lg">api-workers</h2>
-					<span class="text-xs uppercase tracking-widest text-[color:var(--app-ink-muted)]">
-						console
-					</span>
+			<aside class="app-sidebar fixed inset-y-0 left-0 z-40 flex w-[18.5rem] max-w-[86vw] -translate-x-full flex-col overflow-y-auto rounded-r-[28px] px-5 py-6 shadow-xl transition-transform duration-300 ease-in-out peer-checked:translate-x-0 lg:sticky lg:top-5 lg:z-10 lg:mx-5 lg:my-5 lg:h-[calc(100vh-40px)] lg:w-auto lg:translate-x-0 lg:rounded-[30px] lg:shadow-none">
+				<div class="mb-8 flex flex-col gap-3">
+					<div class="flex flex-col gap-1.5">
+						<h2 class="app-title text-[21px]">api-workers</h2>
+						<span class="text-xs uppercase tracking-widest text-[color:var(--app-ink-muted)]">
+							control center
+						</span>
+					</div>
 				</div>
 				<nav class="flex flex-col gap-2.5">
 					{tabs.map((tab) => (
@@ -141,55 +154,50 @@ export const AppLayout = ({
 						</button>
 					))}
 				</nav>
-			</aside>
-			<main class="px-4 pt-5 pb-16 sm:px-10 sm:pt-8">
-				<div class="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-					<div>
-						<h1 class="app-title text-2xl">{activeLabel}</h1>
-						<p class="text-sm text-[color:var(--app-ink-muted)]">
-							集中管理渠道、模型、令牌与使用情况。
-						</p>
-					</div>
-					<div class="hidden items-center gap-3 lg:flex">
-						<span class="app-badge text-xs">{token ? "已登录" : "未登录"}</span>
-						<button
-							class="app-button app-button-ghost app-focus h-11 px-4 text-sm"
-							type="button"
-							onClick={onLogout}
-						>
-							退出
-						</button>
-					</div>
+				<div class="mt-auto hidden w-full items-center justify-between gap-2 rounded-[18px] border border-[color:var(--app-border)] bg-[color:var(--app-surface-muted)] px-3 py-2 text-xs text-[color:var(--app-ink-muted)] lg:flex">
+					<span>{token ? "已登录" : "未登录"}</span>
+					<Button
+						class="h-8 px-3 text-[11px]"
+						size="sm"
+						variant="ghost"
+						type="button"
+						onClick={onLogout}
+					>
+						退出
+					</Button>
 				</div>
-				{children}
+			</aside>
+			<main class="px-4 pt-5 pb-16 sm:px-10 sm:pt-8 lg:pt-5 lg:pl-0 lg:pr-8">
+				<div class="animate-fade-up">{children}</div>
 			</main>
-			{notice && (
-				<output
-					aria-live="polite"
-					class="app-toast"
-					style={`--toast-duration: ${noticeDuration}ms`}
-				>
-					<div class={`app-toast-card ${noticeToneStyles[notice.tone]}`}>
-						<div class="flex items-start justify-between gap-3">
-							<div>
-								<span class="app-chip text-[10px]">
-									{noticeToneLabel[notice.tone]}
-								</span>
-								<div class="mt-1 text-sm font-semibold text-[color:var(--app-ink)]">
-									{notice.message}
+			{notices.length > 0 && (
+				<ToastViewport aria-live="polite">
+					{notices.map((notice) => (
+						<Toast
+							class={noticeToneStyles[notice.tone]}
+							key={notice.id}
+							style={`--toast-duration: ${notice.durationMs ?? 4500}ms`}
+						>
+							<div class="flex items-start justify-between gap-3">
+								<div>
+									<Chip class="text-[10px]">
+										{noticeToneLabel[notice.tone]}
+									</Chip>
+									<ToastTitle>{notice.message}</ToastTitle>
 								</div>
+								<Button
+									class="h-8 px-3 text-[11px]"
+									size="sm"
+									type="button"
+									onClick={() => onDismissNotice(notice.id)}
+								>
+									关闭
+								</Button>
 							</div>
-							<button
-								class="app-button app-focus h-8 px-3 text-[11px]"
-								type="button"
-								onClick={onDismissNotice}
-							>
-								关闭
-							</button>
-						</div>
-						<span aria-hidden="true" class="app-toast-progress" />
-					</div>
-				</output>
+							<ToastProgress aria-hidden="true" />
+						</Toast>
+					))}
+				</ToastViewport>
 			)}
 			<button
 				aria-label="关闭导航"

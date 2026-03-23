@@ -10,12 +10,16 @@ import newapiChannelRoutes from "./routes/newapiChannels";
 import newapiGroupRoutes from "./routes/newapiGroups";
 import newapiUserRoutes from "./routes/newapiUsers";
 import proxyRoutes from "./routes/proxy";
+import runtimeEventsRoutes from "./routes/runtime-events";
 import settingsRoutes from "./routes/settings";
 import siteRoutes from "./routes/sites";
 import tokenRoutes from "./routes/tokens";
 import usageRoutes from "./routes/usage";
+import { handleUsageQueue } from "./services/usage-queue";
+import { warmupWasmCore } from "./wasm/core";
 
 const app = new Hono<AppEnv>({ strict: false });
+warmupWasmCore();
 app.use(
 	"/api/*",
 	cors({
@@ -74,6 +78,7 @@ app.route("/api/tokens", tokenRoutes);
 app.route("/api/usage", usageRoutes);
 app.route("/api/dashboard", dashboardRoutes);
 app.route("/api/settings", settingsRoutes);
+app.route("/api/runtime-events", runtimeEventsRoutes);
 app.route("/api/channel", newapiChannelRoutes);
 app.route("/api/user", newapiUserRoutes);
 app.route("/api/group", newapiGroupRoutes);
@@ -81,14 +86,7 @@ app.route("/api/group", newapiGroupRoutes);
 app.route("/v1", proxyRoutes);
 app.route("/v1beta", proxyRoutes);
 
-app.onError((err, c) => {
-	console.error("[app:error]", {
-		method: c.req.method,
-		path: c.req.path,
-		message: err.message,
-		stack: err.stack,
-	});
-
+app.onError((_, c) => {
 	if (
 		c.req.path === "/api" ||
 		c.req.path.startsWith("/api/") ||
@@ -137,6 +135,11 @@ app.notFound(async (c) => {
 	return assets.fetch(new Request(url.toString(), c.req.raw));
 });
 
-export default app;
+export default {
+	fetch: app.fetch,
+	queue: handleUsageQueue,
+};
 
+export { CacheVersionStore } from "./services/cache-version-store";
 export { CheckinScheduler } from "./services/checkin-scheduler";
+export { UsageLimiter } from "./services/usage-limiter";

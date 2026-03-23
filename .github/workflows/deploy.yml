@@ -260,6 +260,65 @@ jobs:
         if: steps.check-db.outputs.db_exists != 'true'
         run: bunx wrangler telemetry disable
 
+      - name: Create or verify Queue
+        if: steps.check-db.outputs.db_exists != 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          echo "检查并创建 Queue..."
+          QUEUE_LIST_RAW=$(bunx wrangler queues list --json --config apps/worker/wrangler.toml 2>/dev/null || echo "[]")
+          QUEUE_EXISTS=$(QUEUE_LIST_RAW="$QUEUE_LIST_RAW" node - <<'NODE'
+          const raw = process.env.QUEUE_LIST_RAW || "";
+          const target = "usage-events";
+          const first = raw.search(/[\[{]/);
+          let jsonText = raw;
+          if (first >= 0) {
+            jsonText = raw.slice(first);
+          }
+          let list = null;
+          try {
+            list = JSON.parse(jsonText);
+          } catch {
+            const last = raw.lastIndexOf("]");
+            if (first >= 0 && last > first) {
+              try {
+                list = JSON.parse(raw.slice(first, last + 1));
+              } catch {}
+            }
+          }
+          if (!Array.isArray(list)) {
+            console.log("unknown");
+            process.exit(0);
+          }
+          const exists = list.some((item) => item && item.name === target);
+          console.log(exists ? "true" : "false");
+          NODE
+          )
+
+          if [ "$QUEUE_EXISTS" = "true" ]; then
+            echo "✅ Queue 已存在: usage-events"
+          else
+            echo "创建 Queue: usage-events"
+            CREATE_OUTPUT=""
+            CREATE_STATUS=0
+            set +e
+            CREATE_OUTPUT=$(bunx wrangler queues create usage-events --config apps/worker/wrangler.toml 2>&1)
+            CREATE_STATUS=$?
+            set -e
+            if [ $CREATE_STATUS -eq 0 ]; then
+              echo "✅ Queue 已创建: usage-events"
+            else
+              if echo "$CREATE_OUTPUT" | grep -Eqi "already exists|already taken|code: 11009"; then
+                echo "✅ Queue 已存在: usage-events"
+              else
+                echo "❌ 队列创建失败，输出如下："
+                echo "$CREATE_OUTPUT"
+                exit $CREATE_STATUS
+              fi
+            fi
+          fi
+
       - name: Create D1 database (init only)
         if: steps.check-db.outputs.db_exists != 'true'
         env:
@@ -286,6 +345,43 @@ jobs:
 
           sed -i -E "s/(database_id = \")([^\"]+)(\")/\\1$DATABASE_ID\\3/" apps/worker/wrangler.toml
           echo "database_id=$DATABASE_ID" >> $GITHUB_ENV
+
+      - name: Create or verify KV namespace
+        if: steps.check-db.outputs.db_exists != 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          echo "检查并创建 KV Namespace..."
+          KV_NAMESPACE_TITLE="api-worker-hot"
+          KV_LIST_RAW=$(bunx wrangler kv namespace list --config apps/worker/wrangler.toml 2>/dev/null || true)
+          KV_ID=$(KV_LIST_RAW="$KV_LIST_RAW" KV_NAMESPACE_TITLE="$KV_NAMESPACE_TITLE" node -e 'const raw=process.env.KV_LIST_RAW||"";const title=(process.env.KV_NAMESPACE_TITLE||"").toLowerCase();const idPattern=/[0-9a-f]{32}/ig;const lines=raw.split(/\r?\n/);let found="";for(const line of lines){if(!line.toLowerCase().includes(title))continue;const match=line.match(idPattern);if(match&&match[0]){found=match[0].toLowerCase();break;}}if(!found&&title){const escapedTitle=title.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");const nearby=new RegExp(`${escapedTitle}[\\s\\S]{0,120}([0-9a-f]{32})`,"i");const m=raw.toLowerCase().match(nearby);if(m&&m[1])found=m[1].toLowerCase();}process.stdout.write(found);')
+
+          if [ -z "$KV_ID" ] || [ "$KV_ID" = "null" ]; then
+            CREATE_OUTPUT=$(bunx wrangler kv namespace create "$KV_NAMESPACE_TITLE" --config apps/worker/wrangler.toml 2>&1)
+            KV_ID=$(CREATE_OUTPUT="$CREATE_OUTPUT" node -e 'const raw=process.env.CREATE_OUTPUT||"";const exact=raw.match(/^\s*id\s*=\s*"([0-9a-f]{32})"/im);if(exact&&exact[1]){process.stdout.write(exact[1].toLowerCase());process.exit(0);}const any=raw.match(/\b([0-9a-f]{32})\b/i);if(any&&any[1])process.stdout.write(any[1].toLowerCase());')
+
+            if [ -z "$KV_ID" ] || [ "$KV_ID" = "null" ]; then
+              KV_LIST_RAW=$(bunx wrangler kv namespace list --config apps/worker/wrangler.toml 2>/dev/null || true)
+              KV_ID=$(KV_LIST_RAW="$KV_LIST_RAW" KV_NAMESPACE_TITLE="$KV_NAMESPACE_TITLE" node -e 'const raw=process.env.KV_LIST_RAW||"";const title=(process.env.KV_NAMESPACE_TITLE||"").toLowerCase();const idPattern=/[0-9a-f]{32}/ig;const lines=raw.split(/\r?\n/);let found="";for(const line of lines){if(!line.toLowerCase().includes(title))continue;const match=line.match(idPattern);if(match&&match[0]){found=match[0].toLowerCase();break;}}if(!found&&title){const escapedTitle=title.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");const nearby=new RegExp(`${escapedTitle}[\\s\\S]{0,120}([0-9a-f]{32})`,"i");const m=raw.toLowerCase().match(nearby);if(m&&m[1])found=m[1].toLowerCase();}process.stdout.write(found);')
+            fi
+          fi
+
+          if [ -z "$KV_ID" ] || [ "$KV_ID" = "null" ]; then
+            echo "❌ 无法创建或找到 KV Namespace: $KV_NAMESPACE_TITLE（list/create 输出未解析到有效 id）"
+            exit 1
+          fi
+
+          sed -i -E '/binding = "KV_HOT"/,/^\[\[/{s/(id = ")[^"]+(")/\1'"$KV_ID"'\2/;}' apps/worker/wrangler.toml
+          KV_CONFIG_ID=$(grep -A4 'binding = "KV_HOT"' apps/worker/wrangler.toml | grep -m1 -oP '(?<=id = ")[^"]+')
+          if [ "$KV_CONFIG_ID" != "$KV_ID" ]; then
+            echo "❌ KV_HOT 写回失败：期望 $KV_ID，实际 ${KV_CONFIG_ID:-<empty>}"
+            echo "当前 KV_HOT 配置片段："
+            grep -A4 'binding = "KV_HOT"' apps/worker/wrangler.toml || true
+            exit 1
+          fi
+          echo "kv_hot_id=$KV_ID" >> $GITHUB_ENV
+          echo "✅ KV Namespace 就绪: $KV_ID"
 
       - name: Apply D1 migrations (remote)
         if: steps.check-db.outputs.db_exists != 'true'
@@ -359,6 +455,65 @@ jobs:
       - name: Disable wrangler telemetry
         run: bunx wrangler telemetry disable
 
+      - name: Create or verify Queue
+        if: needs.check-config.outputs.deploy_worker == 'true' || needs.check-config.outputs.should_migrate == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          echo "检查并创建 Queue..."
+          QUEUE_LIST_RAW=$(bunx wrangler queues list --json --config apps/worker/wrangler.toml 2>/dev/null || echo "[]")
+          QUEUE_EXISTS=$(QUEUE_LIST_RAW="$QUEUE_LIST_RAW" node - <<'NODE'
+          const raw = process.env.QUEUE_LIST_RAW || "";
+          const target = "usage-events";
+          const first = raw.search(/[\[{]/);
+          let jsonText = raw;
+          if (first >= 0) {
+            jsonText = raw.slice(first);
+          }
+          let list = null;
+          try {
+            list = JSON.parse(jsonText);
+          } catch {
+            const last = raw.lastIndexOf("]");
+            if (first >= 0 && last > first) {
+              try {
+                list = JSON.parse(raw.slice(first, last + 1));
+              } catch {}
+            }
+          }
+          if (!Array.isArray(list)) {
+            console.log("unknown");
+            process.exit(0);
+          }
+          const exists = list.some((item) => item && item.name === target);
+          console.log(exists ? "true" : "false");
+          NODE
+          )
+
+          if [ "$QUEUE_EXISTS" = "true" ]; then
+            echo "✅ Queue 已存在: usage-events"
+          else
+            echo "创建 Queue: usage-events"
+            CREATE_OUTPUT=""
+            CREATE_STATUS=0
+            set +e
+            CREATE_OUTPUT=$(bunx wrangler queues create usage-events --config apps/worker/wrangler.toml 2>&1)
+            CREATE_STATUS=$?
+            set -e
+            if [ $CREATE_STATUS -eq 0 ]; then
+              echo "✅ Queue 已创建: usage-events"
+            else
+              if echo "$CREATE_OUTPUT" | grep -Eqi "already exists|already taken|code: 11009"; then
+                echo "✅ Queue 已存在: usage-events"
+              else
+                echo "❌ 队列创建失败，输出如下："
+                echo "$CREATE_OUTPUT"
+                exit $CREATE_STATUS
+              fi
+            fi
+          fi
+
       - name: Create or verify D1 Database
         if: needs.check-config.outputs.deploy_worker == 'true' || needs.check-config.outputs.deploy_ui == 'true' || needs.check-config.outputs.should_migrate == 'true'
         env:
@@ -393,6 +548,43 @@ jobs:
 
           sed -i -E "s/(database_id = \")([^\"]+)(\")/\\1$DATABASE_ID\\3/" apps/worker/wrangler.toml
           echo "database_id=$DATABASE_ID" >> $GITHUB_ENV
+
+      - name: Create or verify KV namespace
+        if: needs.check-config.outputs.deploy_worker == 'true' || needs.check-config.outputs.deploy_ui == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          echo "检查并创建 KV Namespace..."
+          KV_NAMESPACE_TITLE="api-worker-hot"
+          KV_LIST_RAW=$(bunx wrangler kv namespace list --config apps/worker/wrangler.toml 2>/dev/null || true)
+          KV_ID=$(KV_LIST_RAW="$KV_LIST_RAW" KV_NAMESPACE_TITLE="$KV_NAMESPACE_TITLE" node -e 'const raw=process.env.KV_LIST_RAW||"";const title=(process.env.KV_NAMESPACE_TITLE||"").toLowerCase();const idPattern=/[0-9a-f]{32}/ig;const lines=raw.split(/\r?\n/);let found="";for(const line of lines){if(!line.toLowerCase().includes(title))continue;const match=line.match(idPattern);if(match&&match[0]){found=match[0].toLowerCase();break;}}if(!found&&title){const escapedTitle=title.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");const nearby=new RegExp(`${escapedTitle}[\\s\\S]{0,120}([0-9a-f]{32})`,"i");const m=raw.toLowerCase().match(nearby);if(m&&m[1])found=m[1].toLowerCase();}process.stdout.write(found);')
+
+          if [ -z "$KV_ID" ] || [ "$KV_ID" = "null" ]; then
+            CREATE_OUTPUT=$(bunx wrangler kv namespace create "$KV_NAMESPACE_TITLE" --config apps/worker/wrangler.toml 2>&1)
+            KV_ID=$(CREATE_OUTPUT="$CREATE_OUTPUT" node -e 'const raw=process.env.CREATE_OUTPUT||"";const exact=raw.match(/^\s*id\s*=\s*"([0-9a-f]{32})"/im);if(exact&&exact[1]){process.stdout.write(exact[1].toLowerCase());process.exit(0);}const any=raw.match(/\b([0-9a-f]{32})\b/i);if(any&&any[1])process.stdout.write(any[1].toLowerCase());')
+
+            if [ -z "$KV_ID" ] || [ "$KV_ID" = "null" ]; then
+              KV_LIST_RAW=$(bunx wrangler kv namespace list --config apps/worker/wrangler.toml 2>/dev/null || true)
+              KV_ID=$(KV_LIST_RAW="$KV_LIST_RAW" KV_NAMESPACE_TITLE="$KV_NAMESPACE_TITLE" node -e 'const raw=process.env.KV_LIST_RAW||"";const title=(process.env.KV_NAMESPACE_TITLE||"").toLowerCase();const idPattern=/[0-9a-f]{32}/ig;const lines=raw.split(/\r?\n/);let found="";for(const line of lines){if(!line.toLowerCase().includes(title))continue;const match=line.match(idPattern);if(match&&match[0]){found=match[0].toLowerCase();break;}}if(!found&&title){const escapedTitle=title.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");const nearby=new RegExp(`${escapedTitle}[\\s\\S]{0,120}([0-9a-f]{32})`,"i");const m=raw.toLowerCase().match(nearby);if(m&&m[1])found=m[1].toLowerCase();}process.stdout.write(found);')
+            fi
+          fi
+
+          if [ -z "$KV_ID" ] || [ "$KV_ID" = "null" ]; then
+            echo "❌ 无法创建或找到 KV Namespace: $KV_NAMESPACE_TITLE（list/create 输出未解析到有效 id）"
+            exit 1
+          fi
+
+          sed -i -E '/binding = "KV_HOT"/,/^\[\[/{s/(id = ")[^"]+(")/\1'"$KV_ID"'\2/;}' apps/worker/wrangler.toml
+          KV_CONFIG_ID=$(grep -A4 'binding = "KV_HOT"' apps/worker/wrangler.toml | grep -m1 -oP '(?<=id = ")[^"]+')
+          if [ "$KV_CONFIG_ID" != "$KV_ID" ]; then
+            echo "❌ KV_HOT 写回失败：期望 $KV_ID，实际 ${KV_CONFIG_ID:-<empty>}"
+            echo "当前 KV_HOT 配置片段："
+            grep -A4 'binding = "KV_HOT"' apps/worker/wrangler.toml || true
+            exit 1
+          fi
+          echo "kv_hot_id=$KV_ID" >> $GITHUB_ENV
+          echo "✅ KV Namespace 就绪: $KV_ID"
 
       - name: Apply D1 migrations (remote)
         if: needs.check-config.outputs.should_migrate == 'true'

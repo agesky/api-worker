@@ -18,7 +18,15 @@ export type UsageInput = {
 	upstreamStatus?: number | null;
 	errorCode?: string | null;
 	errorMessage?: string | null;
+	failureStage?: string | null;
+	failureReason?: string | null;
+	usageSource?: string | null;
+	errorMetaJson?: string | null;
 };
+
+const PRUNE_INTERVAL_MS = 60 * 60 * 1000;
+let lastPruneAt = 0;
+let lastPruneRetention: number | null = null;
 
 /**
  * Inserts a usage record and updates token quota.
@@ -43,7 +51,7 @@ export async function recordUsage(
 			: String(input.reasoningEffort);
 	await db
 		.prepare(
-			"INSERT INTO usage_logs (id, token_id, channel_id, model, request_path, total_tokens, prompt_tokens, completion_tokens, cost, latency_ms, first_token_latency_ms, stream, reasoning_effort, status, upstream_status, error_code, error_message, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			"INSERT INTO usage_logs (id, token_id, channel_id, model, request_path, total_tokens, prompt_tokens, completion_tokens, cost, latency_ms, first_token_latency_ms, stream, reasoning_effort, status, upstream_status, error_code, error_message, failure_stage, failure_reason, usage_source, error_meta_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		)
 		.bind(
 			id,
@@ -63,6 +71,10 @@ export async function recordUsage(
 			input.upstreamStatus ?? null,
 			input.errorCode ?? null,
 			input.errorMessage ?? null,
+			input.failureStage ?? null,
+			input.failureReason ?? null,
+			input.usageSource ?? null,
+			input.errorMetaJson ?? null,
 			createdAt,
 		)
 		.run();
@@ -84,6 +96,15 @@ export async function pruneUsageLogs(
 	db: D1Database,
 	retentionDays: number,
 ): Promise<void> {
+	const now = Date.now();
+	if (
+		lastPruneRetention === retentionDays &&
+		now - lastPruneAt < PRUNE_INTERVAL_MS
+	) {
+		return;
+	}
+	lastPruneRetention = retentionDays;
+	lastPruneAt = now;
 	const cutoff = new Date();
 	cutoff.setDate(cutoff.getDate() - retentionDays);
 	await db
