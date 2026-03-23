@@ -26,6 +26,20 @@ export function buildCallTokensIndexKey(
 	])}`;
 }
 
+export function buildResponsesAffinityKey(responseId: string): string {
+	return `${HOT_PREFIX}:responses_affinity:${buildVersionKey([
+		"id",
+		responseId.trim(),
+	])}`;
+}
+
+export function buildStreamOptionsCapabilityKey(channelId: string): string {
+	return `${HOT_PREFIX}:stream_options_capability:${buildVersionKey([
+		"channel",
+		channelId.trim(),
+	])}`;
+}
+
 export async function readHotJson<T>(
 	kv: KVNamespace | undefined,
 	key: string,

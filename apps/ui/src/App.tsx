@@ -122,6 +122,7 @@ const initialUsageQuery: UsageQuery = {
 	statuses: [],
 	from: "",
 	to: "",
+	trace_id: "",
 };
 
 const dashboardPresetDays: Record<DashboardQuery["preset"], number> = {
@@ -554,6 +555,7 @@ const App = () => {
 			const statuses = query.statuses.filter(Boolean);
 			const from = query.from.trim();
 			const to = query.to.trim();
+			const traceId = query.trace_id.trim();
 			if (from) {
 				params.set("from", `${from} 00:00:00`);
 			}
@@ -571,6 +573,9 @@ const App = () => {
 			}
 			if (statuses.length > 0) {
 				params.set("statuses", statuses.join(","));
+			}
+			if (traceId) {
+				params.set("trace_id", traceId);
 			}
 			const result = await apiFetch<UsageResponse>(
 				`/api/usage?${params.toString()}`,
@@ -677,14 +682,14 @@ const App = () => {
 			proxy_stream_usage_max_parsers: String(
 				runtimeSettings?.stream_usage_max_parsers ?? 0,
 			),
-			proxy_usage_reserve_breaker_ms: String(
-				runtimeSettings?.usage_reserve_breaker_ms ?? 60000,
-			),
 			proxy_stream_usage_parse_timeout_ms: String(
 				runtimeSettings?.stream_usage_parse_timeout_ms ?? 20000,
 			),
-			proxy_usage_error_message_max_length: String(
-				runtimeSettings?.usage_error_message_max_length ?? 320,
+			proxy_responses_affinity_ttl_seconds: String(
+				runtimeSettings?.responses_affinity_ttl_seconds ?? 86400,
+			),
+			proxy_stream_options_capability_ttl_seconds: String(
+				runtimeSettings?.stream_options_capability_ttl_seconds ?? 604800,
 			),
 			proxy_usage_queue_enabled: runtimeSettings?.usage_queue_enabled ?? true,
 			usage_queue_daily_limit: String(
@@ -851,6 +856,7 @@ const App = () => {
 			statuses: usageFilters.statuses.filter((value) => /^\d+$/.test(value)),
 			from: usageFilters.from.trim(),
 			to: usageFilters.to.trim(),
+			trace_id: usageFilters.trace_id.trim(),
 		};
 		startAction(actionKey);
 		setUsageQuery(nextQuery);
@@ -874,6 +880,7 @@ const App = () => {
 		usageFilters.models,
 		usageFilters.statuses,
 		usageFilters.token_ids,
+		usageFilters.trace_id,
 		usageFilters.to,
 	]);
 
@@ -1310,14 +1317,14 @@ const App = () => {
 			const streamUsageMaxParsers = Number(
 				settingsForm.proxy_stream_usage_max_parsers,
 			);
-			const usageReserveBreakerMs = Number(
-				settingsForm.proxy_usage_reserve_breaker_ms,
-			);
 			const streamUsageParseTimeoutMs = Number(
 				settingsForm.proxy_stream_usage_parse_timeout_ms,
 			);
-			const usageErrorMessageMaxLength = Number(
-				settingsForm.proxy_usage_error_message_max_length,
+			const responsesAffinityTtlSeconds = Number(
+				settingsForm.proxy_responses_affinity_ttl_seconds,
+			);
+			const streamOptionsCapabilityTtlSeconds = Number(
+				settingsForm.proxy_stream_options_capability_ttl_seconds,
 			);
 			const usageQueueDailyLimit = Number(settingsForm.usage_queue_daily_limit);
 			const usageQueueDirectRatio = Number(
@@ -1371,19 +1378,26 @@ const App = () => {
 				return;
 			}
 			if (
-				Number.isNaN(usageReserveBreakerMs) ||
-				usageReserveBreakerMs < 0 ||
 				Number.isNaN(streamUsageParseTimeoutMs) ||
 				streamUsageParseTimeoutMs < 0
 			) {
-				pushNotice("warning", "队列/解析参数需为非负整数");
+				pushNotice("warning", "解析参数需为非负整数");
 				return;
 			}
 			if (
-				Number.isNaN(usageErrorMessageMaxLength) ||
-				usageErrorMessageMaxLength < 1
+				Number.isNaN(responsesAffinityTtlSeconds) ||
+				responsesAffinityTtlSeconds < 60 ||
+				!Number.isInteger(responsesAffinityTtlSeconds)
 			) {
-				pushNotice("warning", "错误消息最大长度需为正整数");
+				pushNotice("warning", "Responses 粘滞 TTL 需为不小于 60 的整数");
+				return;
+			}
+			if (
+				Number.isNaN(streamOptionsCapabilityTtlSeconds) ||
+				streamOptionsCapabilityTtlSeconds < 60 ||
+				!Number.isInteger(streamOptionsCapabilityTtlSeconds)
+			) {
+				pushNotice("warning", "stream_options 能力 TTL 需为不小于 60 的整数");
 				return;
 			}
 			if (Number.isNaN(usageQueueDailyLimit) || usageQueueDailyLimit < 0) {
@@ -1414,9 +1428,10 @@ const App = () => {
 				proxy_stream_usage_mode: streamUsageMode,
 				proxy_stream_usage_max_bytes: streamUsageMaxBytes,
 				proxy_stream_usage_max_parsers: streamUsageMaxParsers,
-				proxy_usage_reserve_breaker_ms: usageReserveBreakerMs,
 				proxy_stream_usage_parse_timeout_ms: streamUsageParseTimeoutMs,
-				proxy_usage_error_message_max_length: usageErrorMessageMaxLength,
+				proxy_responses_affinity_ttl_seconds: responsesAffinityTtlSeconds,
+				proxy_stream_options_capability_ttl_seconds:
+					streamOptionsCapabilityTtlSeconds,
 				proxy_usage_queue_enabled: settingsForm.proxy_usage_queue_enabled,
 				usage_queue_daily_limit: usageQueueDailyLimit,
 				usage_queue_direct_write_ratio: usageQueueDirectRatio,

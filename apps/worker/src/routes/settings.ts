@@ -148,9 +148,9 @@ settings.put("/", async (c) => {
 		stream_usage_mode?: string;
 		stream_usage_max_bytes?: number;
 		stream_usage_max_parsers?: number;
-		usage_reserve_breaker_ms?: number;
 		stream_usage_parse_timeout_ms?: number;
-		usage_error_message_max_length?: number;
+		responses_affinity_ttl_seconds?: number;
+		stream_options_capability_ttl_seconds?: number;
 		usage_queue_enabled?: boolean;
 		usage_queue_daily_limit?: number;
 		usage_queue_direct_write_ratio?: number;
@@ -286,20 +286,6 @@ settings.put("/", async (c) => {
 		runtimeTouched = true;
 	}
 
-	if (body.proxy_usage_reserve_breaker_ms !== undefined) {
-		const breakerMs = Number(body.proxy_usage_reserve_breaker_ms);
-		if (Number.isNaN(breakerMs) || breakerMs < 0) {
-			return jsonError(
-				c,
-				400,
-				"invalid_proxy_usage_reserve_breaker_ms",
-				"invalid_proxy_usage_reserve_breaker_ms",
-			);
-		}
-		runtimePatch.usage_reserve_breaker_ms = Math.floor(breakerMs);
-		runtimeTouched = true;
-	}
-
 	if (body.proxy_stream_usage_parse_timeout_ms !== undefined) {
 		const timeoutMs = Number(body.proxy_stream_usage_parse_timeout_ms);
 		if (Number.isNaN(timeoutMs) || timeoutMs < 0) {
@@ -314,17 +300,39 @@ settings.put("/", async (c) => {
 		runtimeTouched = true;
 	}
 
-	if (body.proxy_usage_error_message_max_length !== undefined) {
-		const maxLength = Number(body.proxy_usage_error_message_max_length);
-		if (Number.isNaN(maxLength) || maxLength < 1) {
+	if (body.proxy_responses_affinity_ttl_seconds !== undefined) {
+		const ttlSeconds = Number(body.proxy_responses_affinity_ttl_seconds);
+		if (
+			Number.isNaN(ttlSeconds) ||
+			ttlSeconds < 60 ||
+			!Number.isInteger(ttlSeconds)
+		) {
 			return jsonError(
 				c,
 				400,
-				"invalid_proxy_usage_error_message_max_length",
-				"invalid_proxy_usage_error_message_max_length",
+				"invalid_proxy_responses_affinity_ttl_seconds",
+				"invalid_proxy_responses_affinity_ttl_seconds",
 			);
 		}
-		runtimePatch.usage_error_message_max_length = Math.floor(maxLength);
+		runtimePatch.responses_affinity_ttl_seconds = ttlSeconds;
+		runtimeTouched = true;
+	}
+
+	if (body.proxy_stream_options_capability_ttl_seconds !== undefined) {
+		const ttlSeconds = Number(body.proxy_stream_options_capability_ttl_seconds);
+		if (
+			Number.isNaN(ttlSeconds) ||
+			ttlSeconds < 60 ||
+			!Number.isInteger(ttlSeconds)
+		) {
+			return jsonError(
+				c,
+				400,
+				"invalid_proxy_stream_options_capability_ttl_seconds",
+				"invalid_proxy_stream_options_capability_ttl_seconds",
+			);
+		}
+		runtimePatch.stream_options_capability_ttl_seconds = ttlSeconds;
 		runtimeTouched = true;
 	}
 

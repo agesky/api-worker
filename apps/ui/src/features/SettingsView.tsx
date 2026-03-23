@@ -314,25 +314,56 @@ export const SettingsView = ({
 							<div class="app-settings-row__main">
 								<label
 									class="app-settings-row__label"
-									for="proxy-usage-breaker"
+									for="proxy-responses-affinity-ttl"
 								>
-									预占熔断时长（毫秒）
+									会话粘滞缓存时长（秒）
 								</label>
 								<p class="app-settings-row__hint">
-									预占失败后在该时长内跳过预占。
+									用于连续会话请求锁定同一渠道，最小 60 秒。
 								</p>
 							</div>
 							<Input
 								class="app-settings-row__control app-settings-row__control--compact"
-								id="proxy-usage-breaker"
-								name="proxy_usage_reserve_breaker_ms"
+								id="proxy-responses-affinity-ttl"
+								name="proxy_responses_affinity_ttl_seconds"
 								type="number"
-								min="0"
-								value={settingsForm.proxy_usage_reserve_breaker_ms}
+								min="60"
+								step="1"
+								value={settingsForm.proxy_responses_affinity_ttl_seconds}
 								onInput={(event) => {
 									const target = event.currentTarget as HTMLInputElement | null;
 									onFormChange({
-										proxy_usage_reserve_breaker_ms: target?.value ?? "",
+										proxy_responses_affinity_ttl_seconds:
+											target?.value ?? "",
+									});
+								}}
+							/>
+						</div>
+						<div class="app-settings-row">
+							<div class="app-settings-row__main">
+								<label
+									class="app-settings-row__label"
+									for="proxy-stream-options-capability-ttl"
+								>
+									参数兼容缓存时长（秒）
+								</label>
+								<p class="app-settings-row__hint">
+									用于缓存渠道对 stream_options 参数的兼容性，最小 60 秒。
+								</p>
+							</div>
+							<Input
+								class="app-settings-row__control app-settings-row__control--compact"
+								id="proxy-stream-options-capability-ttl"
+								name="proxy_stream_options_capability_ttl_seconds"
+								type="number"
+								min="60"
+								step="1"
+								value={settingsForm.proxy_stream_options_capability_ttl_seconds}
+								onInput={(event) => {
+									const target = event.currentTarget as HTMLInputElement | null;
+									onFormChange({
+										proxy_stream_options_capability_ttl_seconds:
+											target?.value ?? "",
 									});
 								}}
 							/>
@@ -455,33 +486,6 @@ export const SettingsView = ({
 									const target = event.currentTarget as HTMLInputElement | null;
 									onFormChange({
 										proxy_stream_usage_parse_timeout_ms: target?.value ?? "",
-									});
-								}}
-							/>
-						</div>
-						<div class="app-settings-row">
-							<div class="app-settings-row__main">
-								<label
-									class="app-settings-row__label"
-									for="proxy-usage-error-max-length"
-								>
-									错误消息最大长度
-								</label>
-								<p class="app-settings-row__hint">
-									usage 错误信息写入日志前的截断长度。
-								</p>
-							</div>
-							<Input
-								class="app-settings-row__control app-settings-row__control--compact"
-								id="proxy-usage-error-max-length"
-								name="proxy_usage_error_message_max_length"
-								type="number"
-								min="1"
-								value={settingsForm.proxy_usage_error_message_max_length}
-								onInput={(event) => {
-									const target = event.currentTarget as HTMLInputElement | null;
-									onFormChange({
-										proxy_usage_error_message_max_length: target?.value ?? "",
 									});
 								}}
 							/>

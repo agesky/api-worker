@@ -2,6 +2,7 @@ import type { D1Database } from "@cloudflare/workers-types";
 import { nowIso } from "../utils/time";
 
 export type UsageInput = {
+	traceId?: string | null;
 	tokenId?: string | null;
 	channelId?: string | null;
 	model?: string | null;
@@ -18,6 +19,10 @@ export type UsageInput = {
 	upstreamStatus?: number | null;
 	errorCode?: string | null;
 	errorMessage?: string | null;
+	failureStage?: string | null;
+	failureReason?: string | null;
+	usageSource?: string | null;
+	errorMetaJson?: string | null;
 };
 
 const PRUNE_INTERVAL_MS = 60 * 60 * 1000;
@@ -47,10 +52,11 @@ export async function recordUsage(
 			: String(input.reasoningEffort);
 	await db
 		.prepare(
-			"INSERT INTO usage_logs (id, token_id, channel_id, model, request_path, total_tokens, prompt_tokens, completion_tokens, cost, latency_ms, first_token_latency_ms, stream, reasoning_effort, status, upstream_status, error_code, error_message, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			"INSERT INTO usage_logs (id, trace_id, token_id, channel_id, model, request_path, total_tokens, prompt_tokens, completion_tokens, cost, latency_ms, first_token_latency_ms, stream, reasoning_effort, status, upstream_status, error_code, error_message, failure_stage, failure_reason, usage_source, error_meta_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		)
 		.bind(
 			id,
+			input.traceId ?? null,
 			input.tokenId ?? null,
 			input.channelId ?? null,
 			input.model ?? null,
@@ -67,6 +73,10 @@ export async function recordUsage(
 			input.upstreamStatus ?? null,
 			input.errorCode ?? null,
 			input.errorMessage ?? null,
+			input.failureStage ?? null,
+			input.failureReason ?? null,
+			input.usageSource ?? null,
+			input.errorMetaJson ?? null,
 			createdAt,
 		)
 		.run();

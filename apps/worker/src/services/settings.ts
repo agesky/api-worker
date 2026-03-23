@@ -25,9 +25,9 @@ const DEFAULT_MODEL_FAILURE_COOLDOWN_THRESHOLD = 2;
 const DEFAULT_PROXY_STREAM_USAGE_MODE = "full";
 const DEFAULT_PROXY_STREAM_USAGE_MAX_BYTES = 0;
 const DEFAULT_PROXY_STREAM_USAGE_MAX_PARSERS = 0;
-const DEFAULT_PROXY_USAGE_RESERVE_BREAKER_MS = 60_000;
 const DEFAULT_PROXY_STREAM_USAGE_PARSE_TIMEOUT_MS = 20_000;
-const DEFAULT_PROXY_USAGE_ERROR_MESSAGE_MAX_LENGTH = 320;
+const DEFAULT_PROXY_RESPONSES_AFFINITY_TTL_SECONDS = 24 * 60 * 60;
+const DEFAULT_PROXY_STREAM_OPTIONS_CAPABILITY_TTL_SECONDS = 7 * 24 * 60 * 60;
 const DEFAULT_CACHE_ENABLED = true;
 const DEFAULT_CACHE_VERSION = 1;
 const DEFAULT_CACHE_DASHBOARD_TTL_SECONDS = 30;
@@ -72,11 +72,12 @@ const PROXY_RETRY_MAX_RETRIES_KEY = "proxy_retry_max_retries";
 const PROXY_STREAM_USAGE_MODE_KEY = "proxy_stream_usage_mode";
 const PROXY_STREAM_USAGE_MAX_BYTES_KEY = "proxy_stream_usage_max_bytes";
 const PROXY_STREAM_USAGE_MAX_PARSERS_KEY = "proxy_stream_usage_max_parsers";
-const PROXY_USAGE_RESERVE_BREAKER_KEY = "proxy_usage_reserve_breaker_ms";
 const PROXY_STREAM_USAGE_PARSE_TIMEOUT_KEY =
 	"proxy_stream_usage_parse_timeout_ms";
-const PROXY_USAGE_ERROR_MESSAGE_MAX_LENGTH_KEY =
-	"proxy_usage_error_message_max_length";
+const PROXY_RESPONSES_AFFINITY_TTL_KEY =
+	"proxy_responses_affinity_ttl_seconds";
+const PROXY_STREAM_OPTIONS_CAPABILITY_TTL_KEY =
+	"proxy_stream_options_capability_ttl_seconds";
 const PROXY_USAGE_QUEUE_ENABLED_KEY = "proxy_usage_queue_enabled";
 const USAGE_QUEUE_DAILY_LIMIT_KEY = "usage_queue_daily_limit";
 const USAGE_QUEUE_DIRECT_WRITE_RATIO_KEY = "usage_queue_direct_write_ratio";
@@ -107,9 +108,9 @@ export type ProxyRuntimeSettings = {
 	stream_usage_mode: string;
 	stream_usage_max_bytes: number;
 	stream_usage_max_parsers: number;
-	usage_reserve_breaker_ms: number;
 	stream_usage_parse_timeout_ms: number;
-	usage_error_message_max_length: number;
+	responses_affinity_ttl_seconds: number;
+	stream_options_capability_ttl_seconds: number;
 	usage_queue_enabled: boolean;
 	usage_queue_daily_limit: number;
 	usage_queue_direct_write_ratio: number;
@@ -421,17 +422,17 @@ export async function getProxyRuntimeSettings(
 		settings[PROXY_STREAM_USAGE_MAX_PARSERS_KEY] ?? null,
 		DEFAULT_PROXY_STREAM_USAGE_MAX_PARSERS,
 	);
-	const usageReserveBreakerMs = parseNonNegativeSetting(
-		settings[PROXY_USAGE_RESERVE_BREAKER_KEY] ?? null,
-		DEFAULT_PROXY_USAGE_RESERVE_BREAKER_MS,
-	);
 	const streamUsageParseTimeout = parseNonNegativeSetting(
 		settings[PROXY_STREAM_USAGE_PARSE_TIMEOUT_KEY] ?? null,
 		DEFAULT_PROXY_STREAM_USAGE_PARSE_TIMEOUT_MS,
 	);
-	const usageErrorMessageMaxLength = parsePositiveSetting(
-		settings[PROXY_USAGE_ERROR_MESSAGE_MAX_LENGTH_KEY] ?? null,
-		DEFAULT_PROXY_USAGE_ERROR_MESSAGE_MAX_LENGTH,
+	const responsesAffinityTtlSeconds = parsePositiveSetting(
+		settings[PROXY_RESPONSES_AFFINITY_TTL_KEY] ?? null,
+		DEFAULT_PROXY_RESPONSES_AFFINITY_TTL_SECONDS,
+	);
+	const streamOptionsCapabilityTtlSeconds = parsePositiveSetting(
+		settings[PROXY_STREAM_OPTIONS_CAPABILITY_TTL_KEY] ?? null,
+		DEFAULT_PROXY_STREAM_OPTIONS_CAPABILITY_TTL_SECONDS,
 	);
 	const usageQueueEnabled = parseBooleanSetting(
 		settings[PROXY_USAGE_QUEUE_ENABLED_KEY] ?? null,
@@ -453,9 +454,9 @@ export async function getProxyRuntimeSettings(
 		stream_usage_mode: streamUsageMode,
 		stream_usage_max_bytes: streamUsageMaxBytes,
 		stream_usage_max_parsers: streamUsageMaxParsers,
-		usage_reserve_breaker_ms: usageReserveBreakerMs,
 		stream_usage_parse_timeout_ms: streamUsageParseTimeout,
-		usage_error_message_max_length: usageErrorMessageMaxLength,
+		responses_affinity_ttl_seconds: responsesAffinityTtlSeconds,
+		stream_options_capability_ttl_seconds: streamOptionsCapabilityTtlSeconds,
 		usage_queue_enabled: usageQueueEnabled,
 		usage_queue_daily_limit: usageQueueDailyLimit,
 		usage_queue_direct_write_ratio: usageQueueDirectWriteRatio,
@@ -548,15 +549,6 @@ export async function setProxyRuntimeSettings(
 			),
 		);
 	}
-	if (update.usage_reserve_breaker_ms !== undefined) {
-		tasks.push(
-			upsertSetting(
-				db,
-				PROXY_USAGE_RESERVE_BREAKER_KEY,
-				String(Math.max(0, Math.floor(update.usage_reserve_breaker_ms))),
-			),
-		);
-	}
 	if (update.stream_usage_parse_timeout_ms !== undefined) {
 		tasks.push(
 			upsertSetting(
@@ -566,12 +558,23 @@ export async function setProxyRuntimeSettings(
 			),
 		);
 	}
-	if (update.usage_error_message_max_length !== undefined) {
+	if (update.responses_affinity_ttl_seconds !== undefined) {
 		tasks.push(
 			upsertSetting(
 				db,
-				PROXY_USAGE_ERROR_MESSAGE_MAX_LENGTH_KEY,
-				String(Math.max(1, Math.floor(update.usage_error_message_max_length))),
+				PROXY_RESPONSES_AFFINITY_TTL_KEY,
+				String(Math.max(1, Math.floor(update.responses_affinity_ttl_seconds))),
+			),
+		);
+	}
+	if (update.stream_options_capability_ttl_seconds !== undefined) {
+		tasks.push(
+			upsertSetting(
+				db,
+				PROXY_STREAM_OPTIONS_CAPABILITY_TTL_KEY,
+				String(
+					Math.max(1, Math.floor(update.stream_options_capability_ttl_seconds)),
+				),
 			),
 		);
 	}

@@ -70,6 +70,17 @@ const formatStream = (value: boolean | number | null | undefined) => {
 	return value ? "是" : "否";
 };
 
+const formatErrorMeta = (value: string | null | undefined): string | null => {
+	if (!value) {
+		return null;
+	}
+	try {
+		return JSON.stringify(JSON.parse(value), null, 2);
+	} catch {
+		return value;
+	}
+};
+
 /**
  * Renders the usage logs view.
  *
@@ -99,6 +110,7 @@ export const UsageView = ({
 	const [activeErrorLog, setActiveErrorLog] = useState<UsageLog | null>(null);
 	const usageColumns = [
 		{ id: "time", label: "时间", locked: true },
+		{ id: "trace", label: "Trace ID" },
 		{ id: "model", label: "模型" },
 		{ id: "channel", label: "渠道" },
 		{ id: "token", label: "令牌" },
@@ -108,6 +120,8 @@ export const UsageView = ({
 		{ id: "first_token", label: "首 token 延迟 (s)" },
 		{ id: "stream", label: "流式" },
 		{ id: "reasoning", label: "推理强度" },
+		{ id: "failure_stage", label: "失败阶段" },
+		{ id: "usage_source", label: "Usage 来源" },
 		{ id: "status", label: "状态码" },
 	];
 	const [visibleColumns, setVisibleColumns] = useState(() =>
@@ -141,7 +155,8 @@ export const UsageView = ({
 		filters.models.length > 0 ||
 		filters.statuses.length > 0 ||
 		filters.from.trim() ||
-		filters.to.trim();
+		filters.to.trim() ||
+		filters.trace_id.trim();
 	const showSkeleton = isRefreshing && usage.length === 0;
 	const channelOptions = useMemo(
 		() =>
@@ -183,6 +198,10 @@ export const UsageView = ({
 			.sort((a, b) => Number(a) - Number(b))
 			.map((value) => ({ value, label: value }));
 	}, [filters.statuses, usage]);
+	const errorMetaText = useMemo(
+		() => formatErrorMeta(activeErrorLog?.error_meta_json),
+		[activeErrorLog],
+	);
 
 	useEffect(() => {
 		if (!activeErrorLog) {
@@ -329,6 +348,25 @@ export const UsageView = ({
 								onChange={(next) => onFiltersChange({ statuses: next })}
 							/>
 						</div>
+						<div>
+							<label
+								class="mb-1.5 block text-xs uppercase tracking-widest text-[color:var(--app-ink-muted)]"
+								for="usage-trace-id"
+							>
+								Trace ID
+							</label>
+							<Input
+								id="usage-trace-id"
+								type="text"
+								placeholder="输入 Trace ID 精确检索"
+								value={filters.trace_id}
+								onInput={(event) =>
+									onFiltersChange({
+										trace_id: (event.currentTarget as HTMLInputElement).value,
+									})
+								}
+							/>
+						</div>
 						<div class="flex items-end gap-2 sm:col-span-2 lg:col-span-3">
 							<Button
 								class="h-9 px-4 text-[11px]"
@@ -361,6 +399,11 @@ export const UsageView = ({
 									{visibleColumnSet.has("time") && (
 										<th class="sticky top-0 bg-[color:var(--app-surface-strong)]/95">
 											时间
+										</th>
+									)}
+									{visibleColumnSet.has("trace") && (
+										<th class="sticky top-0 bg-[color:var(--app-surface-strong)]/95">
+											Trace ID
 										</th>
 									)}
 									{visibleColumnSet.has("model") && (
@@ -410,6 +453,16 @@ export const UsageView = ({
 											<Tooltip content="模型推理强度等级。">
 												<span>推理强度</span>
 											</Tooltip>
+										</th>
+									)}
+									{visibleColumnSet.has("failure_stage") && (
+										<th class="sticky top-0 bg-[color:var(--app-surface-strong)]/95">
+											失败阶段
+										</th>
+									)}
+									{visibleColumnSet.has("usage_source") && (
+										<th class="sticky top-0 bg-[color:var(--app-surface-strong)]/95">
+											Usage 来源
 										</th>
 									)}
 									{visibleColumnSet.has("status") && (
@@ -463,6 +516,11 @@ export const UsageView = ({
 														{formatDateTime(log.created_at)}
 													</td>
 												)}
+												{visibleColumnSet.has("trace") && (
+													<td class="px-3 py-2.5 text-left font-mono text-[11px] text-[color:var(--app-ink)]">
+														{log.trace_id ?? "-"}
+													</td>
+												)}
 												{visibleColumnSet.has("model") && (
 													<td class="px-3 py-2.5 text-left text-xs text-[color:var(--app-ink)] sm:text-sm">
 														{log.model ?? "-"}
@@ -506,6 +564,16 @@ export const UsageView = ({
 												{visibleColumnSet.has("reasoning") && (
 													<td class="px-3 py-2.5 text-left text-xs text-[color:var(--app-ink)] sm:text-sm">
 														{log.reasoning_effort ?? "-"}
+													</td>
+												)}
+												{visibleColumnSet.has("failure_stage") && (
+													<td class="px-3 py-2.5 text-left text-xs text-[color:var(--app-ink)] sm:text-sm">
+														{log.failure_stage ?? "-"}
+													</td>
+												)}
+												{visibleColumnSet.has("usage_source") && (
+													<td class="px-3 py-2.5 text-left text-xs text-[color:var(--app-ink)] sm:text-sm">
+														{log.usage_source ?? "-"}
 													</td>
 												)}
 												{visibleColumnSet.has("status") && (
@@ -629,6 +697,24 @@ export const UsageView = ({
 									<span class="text-[color:var(--app-ink-muted)]">耗时</span>
 									<span>{formatSeconds(activeErrorLog.latency_ms)}</span>
 								</div>
+								<div class="flex items-center justify-between gap-3">
+									<span class="text-[color:var(--app-ink-muted)]">Trace ID</span>
+									<span class="font-mono text-[11px]">
+										{activeErrorLog.trace_id ?? "-"}
+									</span>
+								</div>
+								<div class="flex items-center justify-between gap-3">
+									<span class="text-[color:var(--app-ink-muted)]">失败阶段</span>
+									<span>{activeErrorLog.failure_stage ?? "-"}</span>
+								</div>
+								<div class="flex items-center justify-between gap-3">
+									<span class="text-[color:var(--app-ink-muted)]">失败原因</span>
+									<span>{activeErrorLog.failure_reason ?? "-"}</span>
+								</div>
+								<div class="flex items-center justify-between gap-3">
+									<span class="text-[color:var(--app-ink-muted)]">Usage 来源</span>
+									<span>{activeErrorLog.usage_source ?? "-"}</span>
+								</div>
 							</div>
 						</Card>
 						{activeErrorLog.error_message ? (
@@ -648,6 +734,19 @@ export const UsageView = ({
 								暂无错误摘要，请结合状态码与错误码排查。
 							</p>
 						)}
+						{errorMetaText ? (
+							<Card
+								variant="compact"
+								class="mt-3 text-xs text-[color:var(--app-ink)]"
+							>
+								<div class="text-[11px] font-semibold uppercase tracking-widest text-[color:var(--app-ink-muted)]">
+									诊断元数据
+								</div>
+								<pre class="mt-2 h-32 overflow-auto whitespace-pre-wrap break-words text-[color:var(--app-ink)]">
+									{errorMetaText}
+								</pre>
+							</Card>
+						) : null}
 					</DialogContent>
 				</Dialog>
 			) : null}

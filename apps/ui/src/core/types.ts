@@ -49,6 +49,7 @@ export type Token = {
 
 export type UsageLog = {
 	id: string;
+	trace_id?: string | null;
 	model: string | null;
 	channel_id: string | null;
 	channel_name?: string | null;
@@ -65,6 +66,10 @@ export type UsageLog = {
 	upstream_status?: number | null;
 	error_code?: string | null;
 	error_message?: string | null;
+	failure_stage?: string | null;
+	failure_reason?: string | null;
+	usage_source?: string | null;
+	error_meta_json?: string | null;
 	created_at: string;
 };
 
@@ -75,6 +80,7 @@ export type UsageQuery = {
 	statuses: string[];
 	from: string;
 	to: string;
+	trace_id: string;
 };
 
 export type UsageResponse = {
@@ -136,9 +142,9 @@ export type RuntimeProxySettings = {
 	stream_usage_mode: string;
 	stream_usage_max_bytes: number;
 	stream_usage_max_parsers: number;
-	usage_reserve_breaker_ms: number;
 	stream_usage_parse_timeout_ms: number;
-	usage_error_message_max_length: number;
+	responses_affinity_ttl_seconds: number;
+	stream_options_capability_ttl_seconds: number;
 	usage_queue_enabled: boolean;
 	usage_queue_daily_limit: number;
 	usage_queue_direct_write_ratio: number;
@@ -233,9 +239,9 @@ export type SettingsForm = {
 	proxy_stream_usage_mode: string;
 	proxy_stream_usage_max_bytes: string;
 	proxy_stream_usage_max_parsers: string;
-	proxy_usage_reserve_breaker_ms: string;
 	proxy_stream_usage_parse_timeout_ms: string;
-	proxy_usage_error_message_max_length: string;
+	proxy_responses_affinity_ttl_seconds: string;
+	proxy_stream_options_capability_ttl_seconds: string;
 	proxy_usage_queue_enabled: boolean;
 	usage_queue_daily_limit: string;
 	usage_queue_direct_write_ratio: string;
