@@ -29,6 +29,7 @@ import {
 	filterSites,
 	type SiteSortState,
 	type SiteTestResult,
+	type SiteTestSummary,
 	sortSites,
 	summarizeSiteTests,
 } from "./core/sites";
@@ -110,6 +111,18 @@ type ConfirmState = {
 	confirmLabel?: string;
 	tone?: NoticeTone;
 	onConfirm: () => Promise<void> | void;
+};
+
+type SiteTestFailureItem = {
+	id: string;
+	name: string;
+	message: string;
+};
+
+type SiteTestAllReport = {
+	summary: SiteTestSummary;
+	failedSites: SiteTestFailureItem[];
+	runsAt: string;
 };
 
 const buildActionKey = (scope: string, id?: string) =>
@@ -304,6 +317,9 @@ const App = () => {
 		null,
 	);
 	const [checkinLastRun, setCheckinLastRun] = useState<string | null>(null);
+	const [siteTestAllReport, setSiteTestAllReport] =
+		useState<SiteTestAllReport | null>(null);
+	const [isSiteTestReportOpen, setSiteTestReportOpen] = useState(false);
 	const [, setPendingActions] = useState<Set<string>>(() => new Set());
 	const pendingActionsRef = useRef<Set<string>>(new Set()) as {
 		current: Set<string>;
@@ -399,6 +415,10 @@ const App = () => {
 			setConfirmState(null);
 		}
 	}, [confirmPending]);
+
+	const closeSiteTestReport = useCallback(() => {
+		setSiteTestReportOpen(false);
+	}, []);
 
 	const handleConfirm = useCallback(async () => {
 		if (!confirmState || confirmPending) {
@@ -1053,8 +1073,11 @@ const App = () => {
 			return;
 		}
 		startAction(actionKey);
+		setSiteTestAllReport(null);
+		setSiteTestReportOpen(false);
 		pushNotice("info", "正在执行一键测试...");
 		const results: SiteTestResult[] = [];
+		const failedSites: SiteTestFailureItem[] = [];
 		try {
 			for (const site of data.sites) {
 				if (site.status !== "active") {
@@ -1066,8 +1089,13 @@ const App = () => {
 						method: "POST",
 					});
 					results.push({ status: "success" });
-				} catch (_error) {
+				} catch (error) {
 					results.push({ status: "failed" });
+					failedSites.push({
+						id: site.id,
+						name: site.name || site.id,
+						message: (error as Error).message || "测试失败",
+					});
 				}
 			}
 			await loadSites();
@@ -1080,12 +1108,21 @@ const App = () => {
 				);
 				return;
 			}
+			setSiteTestAllReport({
+				summary,
+				failedSites,
+				runsAt: new Date().toISOString(),
+			});
 			let message =
 				summary.failed > 0
 					? `一键测试完成，成功 ${summary.success}/${testedTotal}，失败 ${summary.failed}。`
 					: `一键测试完成，成功 ${summary.success}/${testedTotal}。`;
 			if (summary.skipped > 0) {
 				message += ` 已跳过 ${summary.skipped} 个禁用站点。`;
+			}
+			if (failedSites.length > 0) {
+				setSiteTestReportOpen(true);
+				message += " 已生成失败清单。";
 			}
 			pushNotice(summary.failed > 0 ? "warning" : "success", message);
 		} finally {
@@ -1560,6 +1597,125 @@ const App = () => {
 		[endAction, isActionPending, loadSites, pushNotice, startAction, apiFetch],
 	);
 
+	const handleDisableFailedSite = useCallback(
+		async (site: SiteTestFailureItem) => {
+			const actionKey = buildActionKey("site:disableFailed", site.id);
+			if (isActionPending(actionKey)) {
+				return;
+			}
+			startAction(actionKey);
+			try {
+				await apiFetch(`/api/sites/${site.id}`, {
+					method: "PATCH",
+					body: JSON.stringify({ status: "disabled" }),
+				});
+				await loadSites();
+				setSiteTestAllReport((prev) => {
+					if (!prev) {
+						return prev;
+					}
+					return {
+						...prev,
+						failedSites: prev.failedSites.filter((item) => item.id !== site.id),
+					};
+				});
+				pushNotice("success", `已禁用失败站点：${site.name}`);
+			} catch (error) {
+				pushNotice("error", (error as Error).message);
+			} finally {
+				endAction(actionKey);
+			}
+		},
+		[endAction, isActionPending, loadSites, pushNotice, startAction, apiFetch],
+	);
+
+	const handleDisableAllFailedSites = useCallback(async () => {
+		const report = siteTestAllReport;
+		if (!report || report.failedSites.length === 0) {
+			pushNotice("info", "当前没有可禁用的失败站点");
+			return;
+		}
+		const actionKey = buildActionKey("site:disableFailedAll");
+		if (isActionPending(actionKey)) {
+			return;
+		}
+		startAction(actionKey);
+		try {
+			const settled = await Promise.allSettled(
+				report.failedSites.map(async (item) => {
+					await apiFetch(`/api/sites/${item.id}`, {
+						method: "PATCH",
+						body: JSON.stringify({ status: "disabled" }),
+					});
+					return item.id;
+				}),
+			);
+			const successIds = settled
+				.filter(
+					(item): item is PromiseFulfilledResult<string> =>
+						item.status === "fulfilled",
+				)
+				.map((item) => item.value);
+			const failedCount = settled.length - successIds.length;
+			await loadSites();
+			setSiteTestAllReport((prev) => {
+				if (!prev || successIds.length === 0) {
+					return prev;
+				}
+				const successSet = new Set(successIds);
+				return {
+					...prev,
+					failedSites: prev.failedSites.filter(
+						(item) => !successSet.has(item.id),
+					),
+				};
+			});
+			if (failedCount > 0) {
+				pushNotice(
+					"warning",
+					`批量禁用完成，成功 ${successIds.length} 个，失败 ${failedCount} 个。`,
+				);
+			} else {
+				pushNotice("success", `已批量禁用 ${successIds.length} 个失败站点。`);
+			}
+		} catch (error) {
+			pushNotice("error", (error as Error).message);
+		} finally {
+			endAction(actionKey);
+		}
+	}, [
+		apiFetch,
+		endAction,
+		isActionPending,
+		loadSites,
+		pushNotice,
+		siteTestAllReport,
+		startAction,
+	]);
+
+	const requestDisableAllFailedSites = useCallback(() => {
+		const report = siteTestAllReport;
+		if (!report || report.failedSites.length === 0) {
+			pushNotice("info", "当前没有可禁用的失败站点");
+			return;
+		}
+		const names = report.failedSites
+			.slice(0, 5)
+			.map((item) => item.name)
+			.join("、");
+		const suffix =
+			report.failedSites.length > 5
+				? ` 等 ${report.failedSites.length} 个站点`
+				: "";
+		openConfirm({
+			title: "批量禁用失败站点",
+			message: `将禁用以下测试失败站点：${names}${suffix}。确认继续吗？`,
+			confirmLabel: "禁用全部失败站点",
+			tone: "error",
+			onConfirm: () => handleDisableAllFailedSites(),
+		});
+	}, [handleDisableAllFailedSites, openConfirm, pushNotice, siteTestAllReport]);
+
 	const handleTokenDelete = useCallback(
 		async (id: string) => {
 			const actionKey = buildActionKey("token:delete", id);
@@ -1861,6 +2017,8 @@ const App = () => {
 					onFormChange={handleSiteFormChange}
 					onRunAll={handleCheckinRunAll}
 					onTestAll={handleSiteTestAll}
+					testFailureCount={siteTestAllReport?.failedSites.length ?? 0}
+					onOpenTestFailures={() => setSiteTestReportOpen(true)}
 				/>
 			);
 		}
@@ -1955,6 +2113,107 @@ const App = () => {
 					notice={loginNotice}
 					onSubmit={handleLogin}
 				/>
+			)}
+			{siteTestAllReport && (
+				<Dialog open={isSiteTestReportOpen} onClose={closeSiteTestReport}>
+					<DialogContent
+						aria-labelledby="site-test-report-title"
+						aria-modal="true"
+						class="max-w-4xl"
+					>
+						<DialogHeader>
+							<div>
+								<DialogTitle id="site-test-report-title">
+									一键测试失败清单
+								</DialogTitle>
+								<DialogDescription>
+									最近测试：
+									{new Date(siteTestAllReport.runsAt).toLocaleString("zh-CN", {
+										hour12: false,
+									})}
+									。成功 {siteTestAllReport.summary.success} / 失败{" "}
+									{siteTestAllReport.summary.failed} / 跳过{" "}
+									{siteTestAllReport.summary.skipped}
+								</DialogDescription>
+							</div>
+							<Button size="sm" type="button" onClick={closeSiteTestReport}>
+								关闭
+							</Button>
+						</DialogHeader>
+						<div class="mt-3 max-h-[55vh] space-y-3 overflow-y-auto">
+							{siteTestAllReport.failedSites.length === 0 ? (
+								<div class="rounded-xl border border-white/60 bg-white/70 px-4 py-4 text-sm text-[color:var(--app-ink-muted)]">
+									失败站点已处理完毕。
+								</div>
+							) : (
+								<div class="space-y-2">
+									{siteTestAllReport.failedSites.map((item) => (
+										<div
+											class="grid gap-3 rounded-xl border border-white/60 bg-white/80 px-4 py-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1.8fr)_auto]"
+											key={item.id}
+										>
+											<div class="min-w-0">
+												<p class="truncate text-sm font-semibold text-[color:var(--app-ink)]">
+													{item.name}
+												</p>
+												<p class="truncate text-[11px] text-[color:var(--app-ink-muted)]">
+													ID: {item.id}
+												</p>
+											</div>
+											<p class="text-xs text-[color:var(--app-danger)]">
+												{item.message}
+											</p>
+											<div class="flex flex-wrap items-center justify-end gap-2">
+												<Button
+													size="sm"
+													type="button"
+													class="h-8 px-3 text-xs"
+													disabled={isActionPending(
+														buildActionKey("site:test", item.id),
+													)}
+													onClick={() => handleSiteTest(item.id)}
+												>
+													重测
+												</Button>
+												<Button
+													size="sm"
+													type="button"
+													variant="danger"
+													class="h-8 px-3 text-xs"
+													disabled={isActionPending(
+														buildActionKey("site:disableFailed", item.id),
+													)}
+													onClick={() => handleDisableFailedSite(item)}
+												>
+													禁用
+												</Button>
+											</div>
+										</div>
+									))}
+								</div>
+							)}
+						</div>
+						<DialogFooter>
+							<Button size="sm" type="button" onClick={closeSiteTestReport}>
+								关闭
+							</Button>
+							<Button
+								size="sm"
+								type="button"
+								variant="danger"
+								disabled={
+									siteTestAllReport.failedSites.length === 0 ||
+									isActionPending(buildActionKey("site:disableFailedAll"))
+								}
+								onClick={requestDisableAllFailedSites}
+							>
+								{isActionPending(buildActionKey("site:disableFailedAll"))
+									? "禁用中..."
+									: "禁用全部失败站点"}
+							</Button>
+						</DialogFooter>
+					</DialogContent>
+				</Dialog>
 			)}
 			{confirmState && (
 				<Dialog open={Boolean(confirmState)} onClose={closeConfirm}>

@@ -60,6 +60,8 @@ type SitesViewProps = {
 	onFormChange: (patch: Partial<SiteForm>) => void;
 	onRunAll: () => void;
 	onTestAll: () => void;
+	testFailureCount?: number;
+	onOpenTestFailures?: () => void;
 };
 
 const pageSizeOptions = [10, 20, 50];
@@ -132,6 +134,8 @@ export const SitesView = ({
 	onFormChange,
 	onRunAll,
 	onTestAll,
+	testFailureCount = 0,
+	onOpenTestFailures,
 }: SitesViewProps) => {
 	const isEditing = Boolean(editingSite);
 	const pageItems = buildPageItems(sitePage, siteTotalPages);
@@ -296,6 +300,16 @@ export const SitesView = ({
 							onClick={onTestAll}
 						>
 							{isTestingAll ? "测试中..." : "一键测试"}
+						</Button>
+						<Button
+							class="h-9 px-4 text-xs"
+							size="sm"
+							type="button"
+							disabled={testFailureCount <= 0 || !onOpenTestFailures}
+							onClick={() => onOpenTestFailures?.()}
+						>
+							失败清单
+							{testFailureCount > 0 ? ` (${testFailureCount})` : ""}
 						</Button>
 						<Button
 							class="h-9 px-4 text-xs"
