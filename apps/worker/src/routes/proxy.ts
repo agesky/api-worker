@@ -135,6 +135,7 @@ const INTERNAL_USAGE_RESERVE_TIMEOUT_MS = 600;
 const INTERNAL_USAGE_QUEUE_SEND_TIMEOUT_MS = 1500;
 const INTERNAL_USAGE_RESERVE_BREAKER_MS = 60_000;
 const INTERNAL_USAGE_ERROR_MESSAGE_MAX_LENGTH = 320;
+const UPSTREAM_ERROR_DETAIL_MAX_LENGTH = 240;
 const HOT_KV_ACTIVE_CHANNELS_TTL_SECONDS = 60;
 const HOT_KV_CALL_TOKENS_TTL_SECONDS = 60;
 const RESPONSES_TOOL_CALL_NOT_FOUND_SNIPPET =
@@ -160,6 +161,40 @@ function normalizeMessage(value: string | null): string | null {
 		return null;
 	}
 	return trimmed;
+}
+
+function truncateMessage(value: string, maxLength: number): string {
+	if (value.length <= maxLength) {
+		return value;
+	}
+	return `${value.slice(0, Math.max(1, maxLength - 1))}…`;
+}
+
+function normalizeSummaryDetail(value: string, maxLength: number): string {
+	const compact = value.replace(/\s+/g, " ").trim();
+	if (!compact) {
+		return "-";
+	}
+	return truncateMessage(compact, maxLength);
+}
+
+function isLikelyHtmlPayload(value: string): boolean {
+	return (
+		/<!doctype\s+html/i.test(value) ||
+		/<html[\s>]/i.test(value) ||
+		/<head[\s>]/i.test(value) ||
+		/<body[\s>]/i.test(value)
+	);
+}
+
+function summarizeHtmlErrorPayload(html: string, statusHint: number): string {
+	const title = normalizeStringField(
+		html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1] ?? null,
+	);
+	const headline = normalizeStringField(
+		html.match(/<h1[^>]*>([^<]+)<\/h1>/i)?.[1] ?? null,
+	);
+	return `upstream_html_error_page: status=${statusHint}, title=${title ?? "-"}, headline=${headline ?? "-"}`;
 }
 
 function normalizeStringField(value: unknown): string | null {
@@ -1128,55 +1163,6 @@ function transformOpenAiStreamOptions(
 	};
 }
 
-function parseCloudflareErrorPage(
-	html: string,
-	statusHint: number,
-): {
-	errorCode: string | null;
-	errorMessage: string | null;
-	errorMetaJson: string | null;
-} | null {
-	const normalized = html.toLowerCase();
-	if (
-		!normalized.includes("cloudflare") ||
-		!normalized.includes("error code")
-	) {
-		return null;
-	}
-	const codeMatch =
-		html.match(/Error code\s*(\d{3})/i) ??
-		html.match(/<title>[^<|]+\|\s*(\d{3})\s*:/i);
-	const errorCodeNum = codeMatch ? Number(codeMatch[1]) : statusHint;
-	if (
-		!Number.isInteger(errorCodeNum) ||
-		errorCodeNum < 500 ||
-		errorCodeNum > 599
-	) {
-		return null;
-	}
-	const rayId = normalizeStringField(
-		html.match(/Cloudflare Ray ID:\s*<strong[^>]*>([^<]+)<\/strong>/i)?.[1] ??
-			null,
-	);
-	const host =
-		normalizeStringField(
-			html.match(
-				/id="cf-host-status"[\s\S]*?<span[^>]*>([^<]+)<\/span>/i,
-			)?.[1] ?? null,
-		) ?? normalizeStringField(html.match(/<title>\s*([^|<]+)\|/i)?.[1] ?? null);
-	const detail = {
-		type: "cloudflare_5xx",
-		error_code: errorCodeNum,
-		ray_id: rayId,
-		host,
-	};
-	return {
-		errorCode: `upstream.cloudflare.${errorCodeNum}`,
-		errorMessage: `cloudflare_${errorCodeNum}: host=${host ?? "-"}, ray_id=${rayId ?? "-"}`,
-		errorMetaJson: JSON.stringify(detail),
-	};
-}
-
 function formatUsageErrorMessage(
 	code: string,
 	detail: string | null,
@@ -1503,9 +1489,17 @@ async function extractErrorDetails(response: Response): Promise<{
 				: typeof raw.param === "string"
 					? raw.param
 					: null;
+		const normalizedErrorMessage = normalizeMessage(errorMessage);
 		return {
 			errorCode,
-			errorMessage: normalizeMessage(errorMessage),
+			errorMessage: `upstream_json_error: status=${response.status}, code=${errorCode ?? "-"}, message=${
+				normalizedErrorMessage
+					? normalizeSummaryDetail(
+							normalizedErrorMessage,
+							UPSTREAM_ERROR_DETAIL_MAX_LENGTH,
+						)
+					: "-"
+			}`,
 			errorMetaJson: JSON.stringify({
 				type: "json_error",
 				param,
@@ -1535,13 +1529,30 @@ async function extractErrorDetails(response: Response): Promise<{
 	if (payloadFromText && typeof payloadFromText === "object") {
 		return extractJsonError(payloadFromText);
 	}
-	const cloudflare = parseCloudflareErrorPage(text, response.status);
-	if (cloudflare) {
-		return cloudflare;
+	const normalizedText = normalizeMessage(text);
+	if (!normalizedText) {
+		return {
+			errorCode: null,
+			errorMessage: null,
+			errorMetaJson: null,
+		};
+	}
+	if (isLikelyHtmlPayload(normalizedText)) {
+		return {
+			errorCode: null,
+			errorMessage: summarizeHtmlErrorPayload(normalizedText, response.status),
+			errorMetaJson: JSON.stringify({
+				type: "html_error",
+				status: response.status,
+			}),
+		};
 	}
 	return {
 		errorCode: null,
-		errorMessage: normalizeMessage(text),
+		errorMessage: `upstream_text_error: status=${response.status}, detail=${normalizeSummaryDetail(
+			normalizedText,
+			UPSTREAM_ERROR_DETAIL_MAX_LENGTH,
+		)}`,
 		errorMetaJson: null,
 	};
 }
