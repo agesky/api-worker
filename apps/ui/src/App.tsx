@@ -693,6 +693,8 @@ const App = () => {
 				runtimeSettings?.upstream_timeout_ms ?? 180000,
 			),
 			proxy_retry_max_retries: String(runtimeSettings?.retry_max_retries ?? 5),
+			proxy_zero_completion_as_error_enabled:
+				runtimeSettings?.zero_completion_as_error_enabled ?? true,
 			proxy_stream_usage_mode: runtimeSettings?.stream_usage_mode ?? "full",
 			proxy_stream_usage_max_bytes: String(
 				runtimeSettings?.stream_usage_max_bytes ?? 0,
@@ -1485,6 +1487,8 @@ const App = () => {
 				proxy_model_failure_cooldown_threshold: failureCooldownThreshold,
 				proxy_upstream_timeout_ms: upstreamTimeoutMs,
 				proxy_retry_max_retries: retryMaxRetries,
+				proxy_zero_completion_as_error_enabled:
+					settingsForm.proxy_zero_completion_as_error_enabled,
 				proxy_stream_usage_mode: streamUsageMode,
 				proxy_stream_usage_max_bytes: streamUsageMaxBytes,
 				proxy_stream_usage_max_parsers: streamUsageMaxParsers,

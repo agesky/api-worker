@@ -33,6 +33,7 @@ const DEFAULT_CACHE_CALL_TOKENS_TTL_SECONDS = 15;
 const DEFAULT_CACHE_SETTINGS_TTL_SECONDS = 30;
 const DEFAULT_PROXY_UPSTREAM_TIMEOUT_MS = 180000;
 const DEFAULT_PROXY_RETRY_MAX_RETRIES = 5;
+const DEFAULT_PROXY_ZERO_COMPLETION_AS_ERROR_ENABLED = true;
 const DEFAULT_PROXY_USAGE_QUEUE_ENABLED = true;
 const DEFAULT_USAGE_QUEUE_DAILY_LIMIT = 10000;
 const DEFAULT_USAGE_QUEUE_DIRECT_WRITE_RATIO = 0.4;
@@ -66,6 +67,8 @@ const CACHE_VERSION_CALL_TOKENS_KEY = "cache_v_call_tokens";
 const CACHE_VERSION_SETTINGS_KEY = "cache_v_settings";
 const PROXY_UPSTREAM_TIMEOUT_KEY = "proxy_upstream_timeout_ms";
 const PROXY_RETRY_MAX_RETRIES_KEY = "proxy_retry_max_retries";
+const PROXY_ZERO_COMPLETION_AS_ERROR_KEY =
+	"proxy_zero_completion_as_error_enabled";
 const PROXY_STREAM_USAGE_MODE_KEY = "proxy_stream_usage_mode";
 const PROXY_STREAM_USAGE_MAX_BYTES_KEY = "proxy_stream_usage_max_bytes";
 const PROXY_STREAM_USAGE_MAX_PARSERS_KEY = "proxy_stream_usage_max_parsers";
@@ -89,6 +92,7 @@ const ATTEMPT_LOG_RETENTION_DAYS_KEY = "attempt_log_retention_days";
 export type RuntimeProxyConfig = {
 	upstream_timeout_ms: number;
 	retry_max_retries: number;
+	zero_completion_as_error_enabled: boolean;
 	model_failure_cooldown_minutes: number;
 	model_failure_cooldown_threshold: number;
 	stream_usage_mode: string;
@@ -111,6 +115,7 @@ export type RuntimeProxyConfig = {
 export type ProxyRuntimeSettings = {
 	upstream_timeout_ms: number;
 	retry_max_retries: number;
+	zero_completion_as_error_enabled: boolean;
 	model_failure_cooldown_minutes: number;
 	model_failure_cooldown_threshold: number;
 	stream_usage_mode: string;
@@ -412,6 +417,10 @@ export async function getProxyRuntimeSettings(
 		settings[PROXY_RETRY_MAX_RETRIES_KEY] ?? null,
 		DEFAULT_PROXY_RETRY_MAX_RETRIES,
 	);
+	const zeroCompletionAsErrorEnabled = parseBooleanSetting(
+		settings[PROXY_ZERO_COMPLETION_AS_ERROR_KEY] ?? null,
+		DEFAULT_PROXY_ZERO_COMPLETION_AS_ERROR_ENABLED,
+	);
 	const modelFailureCooldownMinutes = parseNonNegativeSetting(
 		settings[MODEL_FAILURE_COOLDOWN_KEY] ?? null,
 		DEFAULT_MODEL_FAILURE_COOLDOWN_MINUTES,
@@ -478,6 +487,7 @@ export async function getProxyRuntimeSettings(
 	return {
 		upstream_timeout_ms: upstreamTimeout,
 		retry_max_retries: retryMaxRetries,
+		zero_completion_as_error_enabled: zeroCompletionAsErrorEnabled,
 		model_failure_cooldown_minutes: modelFailureCooldownMinutes,
 		model_failure_cooldown_threshold: modelFailureCooldownThreshold,
 		stream_usage_mode: streamUsageMode,
@@ -541,6 +551,15 @@ export async function setProxyRuntimeSettings(
 				db,
 				PROXY_RETRY_MAX_RETRIES_KEY,
 				String(Math.max(0, Math.floor(update.retry_max_retries))),
+			),
+		);
+	}
+	if (update.zero_completion_as_error_enabled !== undefined) {
+		tasks.push(
+			upsertSetting(
+				db,
+				PROXY_ZERO_COMPLETION_AS_ERROR_KEY,
+				update.zero_completion_as_error_enabled ? "1" : "0",
 			),
 		);
 	}

@@ -54,6 +54,7 @@ export const initialSettingsForm: SettingsForm = {
 	proxy_model_failure_cooldown_threshold: "3",
 	proxy_upstream_timeout_ms: "180000",
 	proxy_retry_max_retries: "5",
+	proxy_zero_completion_as_error_enabled: true,
 	proxy_stream_usage_mode: "full",
 	proxy_stream_usage_max_bytes: "0",
 	proxy_stream_usage_max_parsers: "0",

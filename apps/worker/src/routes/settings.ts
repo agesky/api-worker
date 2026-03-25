@@ -151,6 +151,7 @@ settings.put("/", async (c) => {
 	const runtimePatch: {
 		upstream_timeout_ms?: number;
 		retry_max_retries?: number;
+		zero_completion_as_error_enabled?: boolean;
 		model_failure_cooldown_minutes?: number;
 		model_failure_cooldown_threshold?: number;
 		stream_usage_mode?: string;
@@ -226,6 +227,33 @@ settings.put("/", async (c) => {
 			);
 		}
 		runtimePatch.retry_max_retries = retryMaxRetries;
+		runtimeTouched = true;
+	}
+
+	if (body.proxy_zero_completion_as_error_enabled !== undefined) {
+		const raw = body.proxy_zero_completion_as_error_enabled;
+		let enabled: boolean | null = null;
+		if (typeof raw === "boolean") {
+			enabled = raw;
+		} else if (typeof raw === "number") {
+			enabled = raw !== 0;
+		} else if (typeof raw === "string") {
+			const normalized = raw.trim().toLowerCase();
+			if (["1", "true", "yes", "on"].includes(normalized)) {
+				enabled = true;
+			} else if (["0", "false", "no", "off"].includes(normalized)) {
+				enabled = false;
+			}
+		}
+		if (enabled === null) {
+			return jsonError(
+				c,
+				400,
+				"invalid_proxy_zero_completion_as_error_enabled",
+				"invalid_proxy_zero_completion_as_error_enabled",
+			);
+		}
+		runtimePatch.zero_completion_as_error_enabled = enabled;
 		runtimeTouched = true;
 	}
 

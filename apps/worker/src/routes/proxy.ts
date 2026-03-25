@@ -107,6 +107,16 @@ type ErrorDetails = {
 	errorMetaJson?: string | null;
 };
 
+type AttemptFailureDetail = {
+	attemptIndex: number;
+	channelId: string | null;
+	channelName: string | null;
+	httpStatus: number | null;
+	errorCode: string;
+	errorMessage: string;
+	latencyMs: number;
+};
+
 type ResponsesRequestHints = {
 	previousResponseId: string | null;
 	functionCallOutputIds: string[];
@@ -131,6 +141,7 @@ const STREAM_USAGE_NON_ERROR_THROWN_CODE =
 	"usage_stream_parse_non_error_thrown";
 const PROXY_UPSTREAM_TIMEOUT_ERROR_CODE = "proxy_upstream_timeout";
 const PROXY_UPSTREAM_FETCH_ERROR_CODE = "proxy_upstream_fetch_exception";
+const USAGE_ZERO_COMPLETION_TOKENS_ERROR_CODE = "usage_zero_completion_tokens";
 const INTERNAL_USAGE_RESERVE_TIMEOUT_MS = 600;
 const INTERNAL_USAGE_QUEUE_SEND_TIMEOUT_MS = 1500;
 const INTERNAL_USAGE_RESERVE_BREAKER_MS = 60_000;
@@ -148,6 +159,9 @@ const ATTEMPT_BINDING_UPSTREAM_REQUEST_ID_HEADER =
 	"x-ha-attempt-upstream-request-id";
 const ATTEMPT_DISPATCH_INDEX_HEADER = "x-ha-dispatch-attempt-index";
 const ATTEMPT_DISPATCH_CHANNEL_ID_HEADER = "x-ha-dispatch-channel-id";
+const HA_TRACE_ID_HEADER = "x-ha-trace-id";
+const HA_ATTEMPT_COUNT_HEADER = "x-ha-attempt-count";
+const HA_CANDIDATE_COUNT_HEADER = "x-ha-candidate-count";
 const MAX_ATTEMPT_WORKER_INVOCATIONS = 31;
 
 let activeStreamUsageParsers = 0;
@@ -176,6 +190,51 @@ function normalizeSummaryDetail(value: string, maxLength: number): string {
 		return "-";
 	}
 	return truncateMessage(compact, maxLength);
+}
+
+function buildAttemptFailureSummary(failures: AttemptFailureDetail[]): {
+	statusCounts: Record<string, number>;
+	codeCounts: Record<string, number>;
+	topReason: string | null;
+} {
+	const statusCounts: Record<string, number> = {};
+	const codeCounts: Record<string, number> = {};
+	for (const failure of failures) {
+		const statusKey =
+			failure.httpStatus === null ? "none" : String(failure.httpStatus);
+		statusCounts[statusKey] = (statusCounts[statusKey] ?? 0) + 1;
+		codeCounts[failure.errorCode] = (codeCounts[failure.errorCode] ?? 0) + 1;
+	}
+	let topReason: string | null = null;
+	let topCount = -1;
+	for (const [code, count] of Object.entries(codeCounts)) {
+		if (count > topCount) {
+			topReason = code;
+			topCount = count;
+		}
+	}
+	return {
+		statusCounts,
+		codeCounts,
+		topReason,
+	};
+}
+
+function shouldTreatZeroCompletionAsError(options: {
+	enabled: boolean;
+	endpointType: EndpointType;
+	usage: NormalizedUsage | null;
+}): boolean {
+	if (!options.enabled) {
+		return false;
+	}
+	if (options.endpointType !== "chat" && options.endpointType !== "responses") {
+		return false;
+	}
+	if (!options.usage) {
+		return false;
+	}
+	return options.usage.completionTokens <= 0;
 }
 
 function isLikelyHtmlPayload(value: string): boolean {
@@ -2052,9 +2111,13 @@ proxy.all("/*", tokenAuth, async (c) => {
 	const tokenRecord = c.get("tokenRecord") as TokenRecord;
 	const requestStart = Date.now();
 	const traceId = crypto.randomUUID();
+	let responseAttemptCount = 0;
+	let responseCandidateCount = 0;
 	const withTraceHeader = (response: Response): Response => {
 		const headers = new Headers(response.headers);
-		headers.set("x-ha-trace-id", traceId);
+		headers.set(HA_TRACE_ID_HEADER, traceId);
+		headers.set(HA_ATTEMPT_COUNT_HEADER, String(responseAttemptCount));
+		headers.set(HA_CANDIDATE_COUNT_HEADER, String(responseCandidateCount));
 		return new Response(response.body, {
 			status: response.status,
 			statusText: response.statusText,
@@ -2470,11 +2533,13 @@ proxy.all("/*", tokenAuth, async (c) => {
 			responsesPinnedChannelId = candidateChannelId;
 		}
 	}
+	const affinityFallbackEnabled = true;
 	if (
 		canResolveResponsesAffinity &&
 		hasUnresolvedToolOutput &&
 		responsesPreviousResponseId &&
-		!responsesPinnedChannelId
+		!responsesPinnedChannelId &&
+		!affinityFallbackEnabled
 	) {
 		const code = "responses_affinity_missing";
 		recordEarlyUsage({
@@ -2484,44 +2549,57 @@ proxy.all("/*", tokenAuth, async (c) => {
 		});
 		return jsonErrorWithTrace(409, code, code);
 	}
+	const candidatesBeforeAffinity = candidates;
 	if (responsesPinnedChannelId) {
 		const isActivePinnedChannel = activeChannelRows.some(
 			(channel) => channel.id === responsesPinnedChannelId,
 		);
 		if (!isActivePinnedChannel) {
-			const code = "responses_affinity_channel_disabled";
-			recordEarlyUsage({
-				status: 409,
-				code,
-				message: `responses_affinity_channel_disabled: previous_response_id=${responsesRequestHints?.previousResponseId ?? "-"}, channel_id=${responsesPinnedChannelId}`,
-			});
-			return jsonErrorWithTrace(409, code, code);
+			if (!affinityFallbackEnabled) {
+				const code = "responses_affinity_channel_disabled";
+				recordEarlyUsage({
+					status: 409,
+					code,
+					message: `responses_affinity_channel_disabled: previous_response_id=${responsesRequestHints?.previousResponseId ?? "-"}, channel_id=${responsesPinnedChannelId}`,
+				});
+				return jsonErrorWithTrace(409, code, code);
+			}
+			responsesPinnedChannelId = null;
 		}
-		const isAllowedPinnedChannel = allowedChannels.some(
-			(channel) => channel.id === responsesPinnedChannelId,
-		);
-		if (!isAllowedPinnedChannel) {
-			const code = "responses_affinity_channel_not_allowed";
-			recordEarlyUsage({
-				status: 409,
-				code,
-				message: `responses_affinity_channel_not_allowed: previous_response_id=${responsesRequestHints?.previousResponseId ?? "-"}, channel_id=${responsesPinnedChannelId}`,
-			});
-			return jsonErrorWithTrace(409, code, code);
+		const isAllowedPinnedChannel = responsesPinnedChannelId
+			? allowedChannels.some((channel) => channel.id === responsesPinnedChannelId)
+			: false;
+		if (responsesPinnedChannelId && !isAllowedPinnedChannel) {
+			if (!affinityFallbackEnabled) {
+				const code = "responses_affinity_channel_not_allowed";
+				recordEarlyUsage({
+					status: 409,
+					code,
+					message: `responses_affinity_channel_not_allowed: previous_response_id=${responsesRequestHints?.previousResponseId ?? "-"}, channel_id=${responsesPinnedChannelId}`,
+				});
+				return jsonErrorWithTrace(409, code, code);
+			}
+			responsesPinnedChannelId = null;
 		}
-		candidates = candidates.filter(
-			(channel) => channel.id === responsesPinnedChannelId,
-		);
-		if (candidates.length === 0) {
-			const code = "responses_affinity_channel_model_unavailable";
-			recordEarlyUsage({
-				status: 409,
-				code,
-				message: `responses_affinity_channel_model_unavailable: previous_response_id=${responsesRequestHints?.previousResponseId ?? "-"}, channel_id=${responsesPinnedChannelId}, model=${downstreamModel ?? "-"}`,
-			});
-			return jsonErrorWithTrace(409, code, code);
+		if (responsesPinnedChannelId) {
+			candidates = candidates.filter(
+				(channel) => channel.id === responsesPinnedChannelId,
+			);
 		}
-		if (downstreamModel) {
+		if (responsesPinnedChannelId && candidates.length === 0) {
+			if (!affinityFallbackEnabled) {
+				const code = "responses_affinity_channel_model_unavailable";
+				recordEarlyUsage({
+					status: 409,
+					code,
+					message: `responses_affinity_channel_model_unavailable: previous_response_id=${responsesRequestHints?.previousResponseId ?? "-"}, channel_id=${responsesPinnedChannelId}, model=${downstreamModel ?? "-"}`,
+				});
+				return jsonErrorWithTrace(409, code, code);
+			}
+			responsesPinnedChannelId = null;
+			candidates = candidatesBeforeAffinity;
+		}
+		if (responsesPinnedChannelId && downstreamModel) {
 			const pinnedCooldownMinutes = Math.max(
 				0,
 				Math.floor(runtimeSettings.model_failure_cooldown_minutes),
@@ -2531,25 +2609,29 @@ proxy.all("/*", tokenAuth, async (c) => {
 				1,
 				Math.floor(runtimeSettings.model_failure_cooldown_threshold),
 			);
-			if (pinnedCooldownSeconds > 0) {
-				const coolingChannels = await listCoolingDownChannelsForModel(
-					db,
+				if (pinnedCooldownSeconds > 0) {
+					const coolingChannels = await listCoolingDownChannelsForModel(
+						db,
 					[responsesPinnedChannelId],
 					downstreamModel,
 					pinnedCooldownSeconds,
 					pinnedCooldownThreshold,
-				);
-				if (coolingChannels.has(responsesPinnedChannelId)) {
-					const code = "responses_affinity_channel_cooldown";
-					recordEarlyUsage({
-						status: 409,
-						code,
-						message: `responses_affinity_channel_cooldown: previous_response_id=${responsesRequestHints?.previousResponseId ?? "-"}, channel_id=${responsesPinnedChannelId}, model=${downstreamModel}`,
-					});
-					return jsonErrorWithTrace(409, code, code);
+					);
+					if (coolingChannels.has(responsesPinnedChannelId)) {
+						if (!affinityFallbackEnabled) {
+							const code = "responses_affinity_channel_cooldown";
+							recordEarlyUsage({
+								status: 409,
+								code,
+								message: `responses_affinity_channel_cooldown: previous_response_id=${responsesRequestHints?.previousResponseId ?? "-"}, channel_id=${responsesPinnedChannelId}, model=${downstreamModel}`,
+							});
+							return jsonErrorWithTrace(409, code, code);
+						}
+						responsesPinnedChannelId = null;
+						candidates = candidatesBeforeAffinity;
+					}
 				}
 			}
-		}
 	}
 	const cooldownMinutes = Math.max(
 		0,
@@ -2631,10 +2713,13 @@ proxy.all("/*", tokenAuth, async (c) => {
 	);
 	const maxAttempts = Math.min(maxRetries + 1, MAX_ATTEMPT_WORKER_INVOCATIONS);
 	const ordered = createWeightedOrder(candidates).slice(0, maxAttempts);
+	responseCandidateCount = ordered.length;
 	const upstreamTimeoutMs = Math.max(
 		0,
 		Math.floor(Number(runtimeSettings.upstream_timeout_ms ?? 30000)),
 	);
+	const zeroCompletionAsErrorEnabled =
+		runtimeSettings.zero_completion_as_error_enabled !== false;
 	const nowSeconds = Math.floor(Date.now() / 1000);
 	let selectedResponse: Response | null = null;
 	let selectedChannel: ChannelRecord | null = null;
@@ -2644,10 +2729,27 @@ proxy.all("/*", tokenAuth, async (c) => {
 	let selectedRequestPath = targetPath;
 	let selectedImmediateUsage: NormalizedUsage | null = null;
 	let selectedHasUsageHeaders = false;
-	let lastResponse: Response | null = null;
-	let lastChannel: ChannelRecord | null = null;
-	let lastRequestPath = targetPath;
 	let lastErrorDetails: ErrorDetails | null = null;
+	let attemptsExecuted = 0;
+	const attemptFailures: AttemptFailureDetail[] = [];
+	const appendAttemptFailure = (options: {
+		attemptIndex: number;
+		channel: ChannelRecord | null;
+		httpStatus: number | null;
+		errorCode: string;
+		errorMessage: string;
+		latencyMs: number;
+	}) => {
+		attemptFailures.push({
+			attemptIndex: options.attemptIndex,
+			channelId: options.channel?.id ?? null,
+			channelName: options.channel?.name ?? null,
+			httpStatus: options.httpStatus,
+			errorCode: options.errorCode,
+			errorMessage: options.errorMessage,
+			latencyMs: options.latencyMs,
+		});
+	};
 	const responsesToolCallMismatchChannels: string[] = [];
 	const streamOptionsCapabilityMemo = new Map<
 		string,
@@ -2947,13 +3049,11 @@ proxy.all("/*", tokenAuth, async (c) => {
 				const meta = dispatchAttemptMeta[resolvedIndex];
 				if (meta) {
 					const attemptNumber = resolvedIndex + 1;
+					attemptsExecuted = Math.max(attemptsExecuted, attemptNumber);
 					const response = dispatchResult.response;
 					const responsePath = dispatchResult.responsePath;
 					const attemptLatencyMs = dispatchResult.latencyMs;
 					const attemptUpstreamRequestId = dispatchResult.upstreamRequestId;
-					lastChannel = meta.channel;
-					lastResponse = response;
-					lastRequestPath = responsePath;
 					if (response.ok) {
 						const hasUsageHeaderSignal = hasUsageHeaders(response.headers);
 						const headerUsage = parseUsageFromHeaders(response.headers);
@@ -3021,6 +3121,63 @@ proxy.all("/*", tokenAuth, async (c) => {
 								upstreamRequestId: attemptUpstreamRequestId,
 								startedAt: meta.attemptStartedAt,
 								endedAt: new Date().toISOString(),
+							});
+							appendAttemptFailure({
+								attemptIndex: attemptNumber,
+								channel: meta.channel,
+								httpStatus: response.status,
+								errorCode: usageMissingCode,
+								errorMessage: usageMissingMessage,
+								latencyMs: attemptLatencyMs,
+							});
+						} else if (
+							shouldTreatZeroCompletionAsError({
+								enabled: zeroCompletionAsErrorEnabled,
+								endpointType,
+								usage: immediateUsage,
+							})
+						) {
+							const zeroCompletionMessage = `${USAGE_ZERO_COMPLETION_TOKENS_ERROR_CODE}: completion_tokens=${immediateUsage?.completionTokens ?? 0}`;
+							lastErrorDetails = {
+								upstreamStatus: response.status,
+								errorCode: USAGE_ZERO_COMPLETION_TOKENS_ERROR_CODE,
+								errorMessage: zeroCompletionMessage,
+							};
+							recordAttemptUsage({
+								channelId: meta.channel.id,
+								requestPath: responsePath,
+								latencyMs: attemptLatencyMs,
+								firstTokenLatencyMs: attemptLatencyMs,
+								usage: immediateUsage,
+								status: "error",
+								upstreamStatus: response.status,
+								errorCode: USAGE_ZERO_COMPLETION_TOKENS_ERROR_CODE,
+								errorMessage: zeroCompletionMessage,
+								failureStage: "usage_finalize",
+								failureReason: USAGE_ZERO_COMPLETION_TOKENS_ERROR_CODE,
+								usageSource: immediateUsageSource,
+							});
+							recordAttemptLog({
+								attemptIndex: attemptNumber,
+								channelId: meta.channel.id,
+								provider: meta.upstreamProvider,
+								model: meta.upstreamModel ?? downstreamModel,
+								status: "error",
+								errorClass: "usage_finalize",
+								errorCode: USAGE_ZERO_COMPLETION_TOKENS_ERROR_CODE,
+								httpStatus: response.status,
+								latencyMs: attemptLatencyMs,
+								upstreamRequestId: attemptUpstreamRequestId,
+								startedAt: meta.attemptStartedAt,
+								endedAt: new Date().toISOString(),
+							});
+							appendAttemptFailure({
+								attemptIndex: attemptNumber,
+								channel: meta.channel,
+								httpStatus: response.status,
+								errorCode: USAGE_ZERO_COMPLETION_TOKENS_ERROR_CODE,
+								errorMessage: zeroCompletionMessage,
+								latencyMs: attemptLatencyMs,
 							});
 						} else {
 							if (!isStream) {
@@ -3138,6 +3295,14 @@ proxy.all("/*", tokenAuth, async (c) => {
 							startedAt: meta.attemptStartedAt,
 							endedAt: new Date().toISOString(),
 						});
+						appendAttemptFailure({
+							attemptIndex: attemptNumber,
+							channel: meta.channel,
+							httpStatus: response.status,
+							errorCode: finalErrorCode,
+							errorMessage: normalizedErrorMessage,
+							latencyMs: attemptLatencyMs,
+						});
 						const cooldownEligible = shouldCooldown(
 							response.status,
 							finalErrorCode,
@@ -3174,10 +3339,16 @@ proxy.all("/*", tokenAuth, async (c) => {
 			}
 		}
 	}
+	if (dispatchHandled && !selectedResponse) {
+		dispatchHandled = false;
+	}
 	if (!dispatchHandled) {
 		for (const [attemptIndex, channel] of ordered.entries()) {
+			if (attemptIndex < attemptsExecuted) {
+				continue;
+			}
 			const attemptNumber = attemptIndex + 1;
-			lastChannel = channel;
+			attemptsExecuted = Math.max(attemptsExecuted, attemptNumber);
 			const attemptStart = Date.now();
 			const attemptStartedAt = new Date(attemptStart).toISOString();
 			const metadata = parseChannelMetadata(channel.metadata_json);
@@ -3435,9 +3606,6 @@ proxy.all("/*", tokenAuth, async (c) => {
 					saveStreamOptionsCapability(channel.id, true);
 				}
 
-				lastResponse = response;
-				lastRequestPath = responsePath;
-
 				if (response.ok) {
 					const hasUsageHeaderSignal = hasUsageHeaders(response.headers);
 					const headerUsage = parseUsageFromHeaders(response.headers);
@@ -3506,6 +3674,65 @@ proxy.all("/*", tokenAuth, async (c) => {
 							startedAt: attemptStartedAt,
 							endedAt: new Date().toISOString(),
 						});
+						appendAttemptFailure({
+							attemptIndex: attemptNumber,
+							channel,
+							httpStatus: response.status,
+							errorCode: usageMissingCode,
+							errorMessage: usageMissingMessage,
+							latencyMs: attemptLatencyMs,
+						});
+						continue;
+					}
+					if (
+						shouldTreatZeroCompletionAsError({
+							enabled: zeroCompletionAsErrorEnabled,
+							endpointType,
+							usage: immediateUsage,
+						})
+					) {
+						const zeroCompletionMessage = `${USAGE_ZERO_COMPLETION_TOKENS_ERROR_CODE}: completion_tokens=${immediateUsage?.completionTokens ?? 0}`;
+						lastErrorDetails = {
+							upstreamStatus: response.status,
+							errorCode: USAGE_ZERO_COMPLETION_TOKENS_ERROR_CODE,
+							errorMessage: zeroCompletionMessage,
+						};
+						recordAttemptUsage({
+							channelId: channel.id,
+							requestPath: responsePath,
+							latencyMs: attemptLatencyMs,
+							firstTokenLatencyMs: attemptLatencyMs,
+							usage: immediateUsage,
+							status: "error",
+							upstreamStatus: response.status,
+							errorCode: USAGE_ZERO_COMPLETION_TOKENS_ERROR_CODE,
+							errorMessage: zeroCompletionMessage,
+							failureStage: "usage_finalize",
+							failureReason: USAGE_ZERO_COMPLETION_TOKENS_ERROR_CODE,
+							usageSource: immediateUsageSource,
+						});
+						recordAttemptLog({
+							attemptIndex: attemptNumber,
+							channelId: channel.id,
+							provider: upstreamProvider,
+							model: upstreamModel ?? downstreamModel,
+							status: "error",
+							errorClass: "usage_finalize",
+							errorCode: USAGE_ZERO_COMPLETION_TOKENS_ERROR_CODE,
+							httpStatus: response.status,
+							latencyMs: attemptLatencyMs,
+							upstreamRequestId: attemptUpstreamRequestId,
+							startedAt: attemptStartedAt,
+							endedAt: new Date().toISOString(),
+						});
+						appendAttemptFailure({
+							attemptIndex: attemptNumber,
+							channel,
+							httpStatus: response.status,
+							errorCode: USAGE_ZERO_COMPLETION_TOKENS_ERROR_CODE,
+							errorMessage: zeroCompletionMessage,
+							latencyMs: attemptLatencyMs,
+						});
 						continue;
 					}
 
@@ -3534,7 +3761,6 @@ proxy.all("/*", tokenAuth, async (c) => {
 						startedAt: attemptStartedAt,
 						endedAt: new Date().toISOString(),
 					});
-
 					selectedChannel = channel;
 					selectedUpstreamProvider = upstreamProvider;
 					try {
@@ -3626,11 +3852,16 @@ proxy.all("/*", tokenAuth, async (c) => {
 					startedAt: attemptStartedAt,
 					endedAt: new Date().toISOString(),
 				});
+				appendAttemptFailure({
+					attemptIndex: attemptNumber,
+					channel,
+					httpStatus: response.status,
+					errorCode: finalErrorCode,
+					errorMessage: normalizedErrorMessage,
+					latencyMs: attemptLatencyMs,
+				});
 
-				const cooldownEligible = shouldCooldown(
-					response.status,
-					finalErrorCode,
-				);
+				const cooldownEligible = shouldCooldown(response.status, finalErrorCode);
 				if (recordModel && cooldownSeconds > 0 && cooldownEligible) {
 					scheduleUsageEvent({
 						type: "model_error",
@@ -3712,6 +3943,14 @@ proxy.all("/*", tokenAuth, async (c) => {
 					startedAt: attemptStartedAt,
 					endedAt: new Date().toISOString(),
 				});
+				appendAttemptFailure({
+					attemptIndex: attemptNumber,
+					channel,
+					httpStatus: null,
+					errorCode: usageErrorCode,
+					errorMessage: usageErrorMessage,
+					latencyMs: attemptLatencyMs,
+				});
 
 				const cooldownEligible = shouldCooldown(null, usageErrorCode);
 				if (recordModel && cooldownSeconds > 0 && cooldownEligible) {
@@ -3741,24 +3980,38 @@ proxy.all("/*", tokenAuth, async (c) => {
 						},
 					});
 				}
-				lastResponse = null;
 			}
 		}
 	}
 
 	if (!selectedResponse) {
-		if (responsesToolCallMismatchChannels.length > 0) {
-			const code = "responses_tool_call_chain_mismatch";
-			const details = `responses_tool_call_chain_mismatch: previous_response_id=${responsesRequestHints?.previousResponseId ?? "-"}, channels=${responsesToolCallMismatchChannels.join(",")}, hint_source=${responsesRequestHints?.hasFunctionCallOutput ? "responses_input" : hasChatToolOutput ? "chat_messages" : "unknown"}`;
-			recordEarlyUsage({
-				status: 409,
-				code,
-				message: details,
-			});
-			return jsonErrorWithTrace(409, code, code);
-		}
-		if (lastResponse && !lastResponse.ok) {
-			return withTraceHeader(lastResponse);
+		responseAttemptCount = attemptsExecuted;
+		if (attemptFailures.length > 0) {
+			const summary = buildAttemptFailureSummary(attemptFailures);
+			const payload = {
+				error: "proxy_all_attempts_failed",
+				code: "proxy_all_attempts_failed",
+				trace_id: traceId,
+				attempt_total: ordered.length,
+				attempt_failed: attemptFailures.length,
+				status_counts: summary.statusCounts,
+				code_counts: summary.codeCounts,
+				top_reason: summary.topReason,
+				failures: attemptFailures.map((failure) => ({
+					attempt_index: failure.attemptIndex,
+					channel_id: failure.channelId,
+					channel_name: failure.channelName,
+					http_status: failure.httpStatus,
+					error_code: failure.errorCode,
+					error_message: failure.errorMessage,
+					latency_ms: failure.latencyMs,
+				})),
+				responses_tool_call_mismatch_channels:
+					responsesToolCallMismatchChannels.length > 0
+						? responsesToolCallMismatchChannels
+						: undefined,
+			};
+			return withTraceHeader(c.json(payload, 503));
 		}
 		if (lastErrorDetails) {
 			const errorCode = lastErrorDetails.errorCode ?? "upstream_unavailable";
@@ -3956,6 +4209,7 @@ proxy.all("/*", tokenAuth, async (c) => {
 		selectedUpstreamEndpoint &&
 		(endpointType === "chat" || endpointType === "responses")
 	) {
+		responseAttemptCount = attemptsExecuted;
 		const transformed = await adaptChatResponse({
 			response: selectedResponse,
 			upstreamProvider: selectedUpstreamProvider,
@@ -3970,6 +4224,7 @@ proxy.all("/*", tokenAuth, async (c) => {
 		}
 	}
 
+	responseAttemptCount = attemptsExecuted;
 	return withTraceHeader(selectedResponse);
 });
 

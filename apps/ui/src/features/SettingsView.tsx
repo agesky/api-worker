@@ -283,6 +283,24 @@ export const SettingsView = ({
             </div>
             <div class="app-settings-row">
               <div class="app-settings-row__main">
+                <span class="app-settings-row__label">无输出 视为失败</span>
+                <p class="app-settings-row__hint">
+                  输出 Tokens 为 0 的结果会触发重试。
+                </p>
+              </div>
+              <div class="app-settings-row__switch">
+                <Switch
+                  checked={settingsForm.proxy_zero_completion_as_error_enabled}
+                  onToggle={(next) => {
+                    onFormChange({
+                      proxy_zero_completion_as_error_enabled: next,
+                    });
+                  }}
+                />
+              </div>
+            </div>
+            <div class="app-settings-row">
+              <div class="app-settings-row__main">
                 <label
                   class="app-settings-row__label"
                   for="proxy-model-failure-cooldown"
@@ -694,7 +712,8 @@ export const SettingsView = ({
                   step="1"
                   value={settingsForm.usage_queue_direct_write_ratio}
                   onInput={(event) => {
-                    const target = event.currentTarget as HTMLInputElement | null;
+                    const target =
+                      event.currentTarget as HTMLInputElement | null;
                     onFormChange({
                       usage_queue_direct_write_ratio: target?.value ?? "",
                     });
