@@ -14,12 +14,15 @@
 		"deploy:init": "node scripts/deploy.mjs init",
 		"deploy:update": "node scripts/deploy.mjs update",
 		"test": "vitest --passWithNoTests",
+		"test:e2e": "playwright test",
+		"test:e2e:headed": "playwright test --headed",
 		"format": "bunx --bun biome format --write .",
 		"lint": "bunx --bun biome lint --write .",
 		"check": "bunx --bun biome check --write .",
 		"typecheck": "bunx --bun tsc --noEmit"
 	},
 	"devDependencies": {
+		"@playwright/test": "^1.54.2",
 		"@biomejs/biome": "2.3.15",
 		"@types/node": "^20.11.30",
 		"typescript": "^5.4.5",
