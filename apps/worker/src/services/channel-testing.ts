@@ -41,14 +41,19 @@ export async function fetchChannelModels(
 ): Promise<ChannelTestResult> {
 	const target = `${normalizeBaseUrl(baseUrl)}/v1/models`;
 	const start = Date.now();
-	const response = await fetch(target, {
-		method: "GET",
-		headers: {
-			Authorization: `Bearer ${apiKey}`,
-			"x-api-key": apiKey,
-			"Content-Type": "application/json",
-		},
-	});
+	let response: Response;
+	try {
+		response = await fetch(target, {
+			method: "GET",
+			headers: {
+				Authorization: `Bearer ${apiKey}`,
+				"x-api-key": apiKey,
+				"Content-Type": "application/json",
+			},
+		});
+	} catch {
+		return { ok: false, elapsed: Date.now() - start, models: [] };
+	}
 
 	const elapsed = Date.now() - start;
 	if (!response.ok) {
