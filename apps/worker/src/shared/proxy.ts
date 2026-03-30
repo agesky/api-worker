@@ -105,6 +105,12 @@ type ErrorDetails = {
 	errorMetaJson?: string | null;
 };
 
+type AbnormalSuccessDetails = {
+	errorCode: string;
+	errorMessage: string;
+	errorMetaJson: string | null;
+};
+
 type AttemptFailureDetail = {
 	attemptIndex: number;
 	channelId: string | null;
@@ -141,6 +147,7 @@ const PROXY_UPSTREAM_TIMEOUT_ERROR_CODE = "proxy_upstream_timeout";
 const PROXY_UPSTREAM_FETCH_ERROR_CODE = "proxy_upstream_fetch_exception";
 const USAGE_ZERO_COMPLETION_TOKENS_ERROR_CODE = "usage_zero_completion_tokens";
 const ABNORMAL_SUCCESS_RESPONSE_ERROR_CODE = "abnormal_success_response";
+const UPSTREAM_STREAM_ERROR_PAYLOAD_CODE = "upstream_stream_error_payload";
 const INTERNAL_USAGE_ERROR_MESSAGE_MAX_LENGTH = 320;
 const UPSTREAM_ERROR_DETAIL_MAX_LENGTH = 240;
 const HOT_KV_ACTIVE_CHANNELS_TTL_SECONDS = 60;
@@ -1507,11 +1514,9 @@ function extractJsonErrorPayload(
 	};
 }
 
-async function detectAbnormalSuccessResponse(response: Response): Promise<{
-	errorCode: string;
-	errorMessage: string;
-	errorMetaJson: string | null;
-} | null> {
+async function detectAbnormalSuccessResponse(
+	response: Response,
+): Promise<AbnormalSuccessDetails | null> {
 	const contentType = response.headers.get("content-type") ?? "";
 	if (!contentType.includes("application/json")) {
 		return null;
@@ -1537,6 +1542,143 @@ async function detectAbnormalSuccessResponse(response: Response): Promise<{
 		errorMessage: finalErrorMessage,
 		errorMetaJson: details.errorMetaJson,
 	};
+}
+
+function extractStreamPayloadError(
+	payload: Record<string, unknown>,
+	context: {
+		eventsSeen: number;
+		bytesRead: number;
+	},
+): AbnormalSuccessDetails | null {
+	const typeValue =
+		typeof payload.type === "string" ? payload.type.trim() : null;
+	const normalizedType = typeValue?.toLowerCase() ?? "";
+	const nestedError =
+		payload.error && typeof payload.error === "object"
+			? (payload.error as Record<string, unknown>)
+			: null;
+	const shouldTreatAsError =
+		Boolean(nestedError) ||
+		normalizedType === "error" ||
+		normalizedType === "response.failed";
+	if (!shouldTreatAsError) {
+		return null;
+	}
+	const upstreamCode =
+		typeof nestedError?.code === "string"
+			? nestedError.code
+			: typeof nestedError?.type === "string"
+				? nestedError.type
+				: typeof payload.code === "string"
+					? payload.code
+					: null;
+	const upstreamMessage =
+		typeof nestedError?.message === "string"
+			? nestedError.message
+			: typeof payload.message === "string"
+				? payload.message
+				: null;
+	const summary = normalizeSummaryDetail(
+		normalizeMessage(upstreamMessage) ?? "-",
+		UPSTREAM_ERROR_DETAIL_MAX_LENGTH,
+	);
+	return {
+		errorCode: UPSTREAM_STREAM_ERROR_PAYLOAD_CODE,
+		errorMessage: `${UPSTREAM_STREAM_ERROR_PAYLOAD_CODE}: status=200, event_type=${
+			typeValue ?? "-"
+		}, code=${upstreamCode ?? "-"}, message=${summary}`,
+		errorMetaJson: stringifyErrorMeta({
+			type: "stream_error_payload",
+			event_type: typeValue ?? null,
+			upstream_code: upstreamCode ?? null,
+			upstream_message: normalizeMessage(upstreamMessage),
+			events_seen: context.eventsSeen,
+			bytes_read: context.bytesRead,
+		}),
+	};
+}
+
+async function detectAbnormalStreamSuccessResponse(
+	response: Response,
+): Promise<AbnormalSuccessDetails | null> {
+	const contentType = response.headers.get("content-type") ?? "";
+	if (!contentType.includes("text/event-stream")) {
+		return null;
+	}
+	const cloned = response.clone();
+	if (!cloned.body) {
+		return null;
+	}
+	const reader = cloned.body.getReader();
+	const decoder = new TextDecoder();
+	const maxProbeEvents = 2;
+	const maxProbeBytes = 32 * 1024;
+	const probeTimeoutMs = 300;
+	let timedOut = false;
+	let bytesRead = 0;
+	let eventsSeen = 0;
+	let buffer = "";
+	const probeTimer = setTimeout(() => {
+		timedOut = true;
+		reader.cancel().catch(() => undefined);
+	}, probeTimeoutMs);
+	try {
+		while (
+			!timedOut &&
+			eventsSeen < maxProbeEvents &&
+			bytesRead < maxProbeBytes
+		) {
+			let chunk: ReadableStreamReadResult<Uint8Array>;
+			try {
+				chunk = await reader.read();
+			} catch {
+				break;
+			}
+			const { done, value } = chunk;
+			if (done) {
+				break;
+			}
+			bytesRead += value?.byteLength ?? 0;
+			buffer += decoder.decode(value, { stream: true });
+			let newlineIndex = buffer.indexOf("\n");
+			while (newlineIndex !== -1) {
+				const line = buffer.slice(0, newlineIndex).trim();
+				buffer = buffer.slice(newlineIndex + 1);
+				if (!line.startsWith("data:")) {
+					newlineIndex = buffer.indexOf("\n");
+					continue;
+				}
+				const payloadText = line.slice(5).trim();
+				if (!payloadText || payloadText === "[DONE]") {
+					newlineIndex = buffer.indexOf("\n");
+					continue;
+				}
+				eventsSeen += 1;
+				const payload = safeJsonParse<Record<string, unknown> | null>(
+					payloadText,
+					null,
+				);
+				if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+					const abnormal = extractStreamPayloadError(payload, {
+						eventsSeen,
+						bytesRead,
+					});
+					if (abnormal) {
+						return abnormal;
+					}
+				}
+				if (eventsSeen >= maxProbeEvents) {
+					break;
+				}
+				newlineIndex = buffer.indexOf("\n");
+			}
+		}
+		return null;
+	} finally {
+		clearTimeout(probeTimer);
+		reader.cancel().catch(() => undefined);
+	}
 }
 
 async function extractErrorDetails(response: Response): Promise<{
@@ -3218,14 +3360,17 @@ proxy.all("/*", tokenAuth, async (c) => {
 							: headerUsage
 								? "header"
 								: "none";
-						const abnormalSuccess =
-							await detectAbnormalSuccessResponse(response);
-						if (abnormalSuccess) {
+						const abnormalResponse =
+							(await detectAbnormalSuccessResponse(response)) ??
+							(isStream
+								? await detectAbnormalStreamSuccessResponse(response)
+								: null);
+						if (abnormalResponse) {
 							lastErrorDetails = {
 								upstreamStatus: response.status,
-								errorCode: abnormalSuccess.errorCode,
-								errorMessage: abnormalSuccess.errorMessage,
-								errorMetaJson: abnormalSuccess.errorMetaJson,
+								errorCode: abnormalResponse.errorCode,
+								errorMessage: abnormalResponse.errorMessage,
+								errorMetaJson: abnormalResponse.errorMetaJson,
 							};
 							recordAttemptUsage({
 								channelId: meta.channel.id,
@@ -3235,12 +3380,12 @@ proxy.all("/*", tokenAuth, async (c) => {
 								usage: null,
 								status: "error",
 								upstreamStatus: response.status,
-								errorCode: abnormalSuccess.errorCode,
-								errorMessage: abnormalSuccess.errorMessage,
+								errorCode: abnormalResponse.errorCode,
+								errorMessage: abnormalResponse.errorMessage,
 								failureStage: "upstream_response",
-								failureReason: abnormalSuccess.errorCode,
+								failureReason: abnormalResponse.errorCode,
 								usageSource: "none",
-								errorMetaJson: abnormalSuccess.errorMetaJson,
+								errorMetaJson: abnormalResponse.errorMetaJson,
 							});
 							recordAttemptLog({
 								attemptIndex: attemptNumber,
@@ -3249,7 +3394,7 @@ proxy.all("/*", tokenAuth, async (c) => {
 								model: meta.upstreamModel ?? downstreamModel,
 								status: "error",
 								errorClass: "upstream_response",
-								errorCode: abnormalSuccess.errorCode,
+								errorCode: abnormalResponse.errorCode,
 								httpStatus: response.status,
 								latencyMs: attemptLatencyMs,
 								upstreamRequestId: attemptUpstreamRequestId,
@@ -3260,28 +3405,28 @@ proxy.all("/*", tokenAuth, async (c) => {
 								attemptIndex: attemptNumber,
 								channel: meta.channel,
 								httpStatus: response.status,
-								errorCode: abnormalSuccess.errorCode,
-								errorMessage: abnormalSuccess.errorMessage,
+								errorCode: abnormalResponse.errorCode,
+								errorMessage: abnormalResponse.errorMessage,
 								latencyMs: attemptLatencyMs,
 							});
 							scheduleModelError({
 								channelId: meta.channel.id,
 								model: meta.recordModel,
 								upstreamStatus: response.status,
-								errorCode: abnormalSuccess.errorCode,
+								errorCode: abnormalResponse.errorCode,
 							});
 							if (downstreamModel && downstreamModel !== meta.recordModel) {
 								scheduleModelError({
 									channelId: meta.channel.id,
 									model: downstreamModel,
 									upstreamStatus: response.status,
-									errorCode: abnormalSuccess.errorCode,
+									errorCode: abnormalResponse.errorCode,
 								});
 							}
 							if (
 								!(await continueAfterFailure(
-									abnormalSuccess.errorCode,
-									abnormalSuccess.errorMessage,
+									abnormalResponse.errorCode,
+									abnormalResponse.errorMessage,
 									attemptNumber,
 								))
 							) {
@@ -3945,13 +4090,17 @@ proxy.all("/*", tokenAuth, async (c) => {
 						: headerUsage
 							? "header"
 							: "none";
-					const abnormalSuccess = await detectAbnormalSuccessResponse(response);
-					if (abnormalSuccess) {
+					const abnormalResponse =
+						(await detectAbnormalSuccessResponse(response)) ??
+						(isStream
+							? await detectAbnormalStreamSuccessResponse(response)
+							: null);
+					if (abnormalResponse) {
 						lastErrorDetails = {
 							upstreamStatus: response.status,
-							errorCode: abnormalSuccess.errorCode,
-							errorMessage: abnormalSuccess.errorMessage,
-							errorMetaJson: abnormalSuccess.errorMetaJson,
+							errorCode: abnormalResponse.errorCode,
+							errorMessage: abnormalResponse.errorMessage,
+							errorMetaJson: abnormalResponse.errorMetaJson,
 						};
 						recordAttemptUsage({
 							channelId: channel.id,
@@ -3961,12 +4110,12 @@ proxy.all("/*", tokenAuth, async (c) => {
 							usage: null,
 							status: "error",
 							upstreamStatus: response.status,
-							errorCode: abnormalSuccess.errorCode,
-							errorMessage: abnormalSuccess.errorMessage,
+							errorCode: abnormalResponse.errorCode,
+							errorMessage: abnormalResponse.errorMessage,
 							failureStage: "upstream_response",
-							failureReason: abnormalSuccess.errorCode,
+							failureReason: abnormalResponse.errorCode,
 							usageSource: "none",
-							errorMetaJson: abnormalSuccess.errorMetaJson,
+							errorMetaJson: abnormalResponse.errorMetaJson,
 						});
 						recordAttemptLog({
 							attemptIndex: attemptNumber,
@@ -3975,7 +4124,7 @@ proxy.all("/*", tokenAuth, async (c) => {
 							model: upstreamModel ?? downstreamModel,
 							status: "error",
 							errorClass: "upstream_response",
-							errorCode: abnormalSuccess.errorCode,
+							errorCode: abnormalResponse.errorCode,
 							httpStatus: response.status,
 							latencyMs: attemptLatencyMs,
 							upstreamRequestId: attemptUpstreamRequestId,
@@ -3986,28 +4135,28 @@ proxy.all("/*", tokenAuth, async (c) => {
 							attemptIndex: attemptNumber,
 							channel,
 							httpStatus: response.status,
-							errorCode: abnormalSuccess.errorCode,
-							errorMessage: abnormalSuccess.errorMessage,
+							errorCode: abnormalResponse.errorCode,
+							errorMessage: abnormalResponse.errorMessage,
 							latencyMs: attemptLatencyMs,
 						});
 						scheduleModelError({
 							channelId: channel.id,
 							model: recordModel,
 							upstreamStatus: response.status,
-							errorCode: abnormalSuccess.errorCode,
+							errorCode: abnormalResponse.errorCode,
 						});
 						if (downstreamModel && downstreamModel !== recordModel) {
 							scheduleModelError({
 								channelId: channel.id,
 								model: downstreamModel,
 								upstreamStatus: response.status,
-								errorCode: abnormalSuccess.errorCode,
+								errorCode: abnormalResponse.errorCode,
 							});
 						}
 						if (
 							!(await continueAfterFailure(
-								abnormalSuccess.errorCode,
-								abnormalSuccess.errorMessage,
+								abnormalResponse.errorCode,
+								abnormalResponse.errorMessage,
 								attemptNumber,
 							))
 						) {
