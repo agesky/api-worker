@@ -24,11 +24,35 @@ const BUN_CMD = (() => {
 	return "bun";
 })();
 
-const commands = [
-	{ name: "attempt-worker", cmd: BUN_CMD, args: ["run", "dev:attempt-worker"] },
-	{ name: "worker", cmd: BUN_CMD, args: ["run", "dev:worker"] },
-	{ name: "ui", cmd: BUN_CMD, args: ["run", "dev:ui"] },
-];
+const isRemote = process.argv.includes("--cloud-db");
+const skipAttemptWorker =
+	process.argv.includes("--no-attempt-worker") ||
+	process.argv.includes("--worker-only");
+const skipUi =
+	process.argv.includes("--no-ui") || process.argv.includes("--worker-only");
+
+const commands = [];
+
+if (!skipAttemptWorker) {
+	commands.push({
+		name: "attempt-worker",
+		cmd: BUN_CMD,
+		args: [
+			"run",
+			isRemote ? "dev:attempt-worker:remote" : "dev:attempt-worker",
+		],
+	});
+}
+
+commands.push({
+	name: "worker",
+	cmd: BUN_CMD,
+	args: ["run", isRemote ? "dev:worker:remote" : "dev:worker"],
+});
+
+if (!skipUi) {
+	commands.push({ name: "ui", cmd: BUN_CMD, args: ["run", "dev:ui"] });
+}
 
 const children = new Map();
 let shuttingDown = false;

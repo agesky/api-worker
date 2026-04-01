@@ -4,6 +4,7 @@
 **/.env
 **/.env.*
 !.env.agent.example
+!.env.example
 **/.wrangler
 **/target
 **/tests
@@ -12,3 +13,5 @@ test-results
 
 .helloagents/plan
 .helloagents/archive
+apps/worker/.wrangler.remote.toml
+apps/attempt-worker/.wrangler.remote.toml

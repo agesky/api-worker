@@ -118,6 +118,24 @@ bun install
 bun run dev
 ```
 
+三种本地启动模式：
+
+- 模式1（正常）：`bun run dev`（主 Worker + 调用执行器 + UI）
+- 模式2（不启辅助 Worker）：`bun run dev:no-attempt-worker`（主 Worker + UI）
+- 模式3（只启主 Worker）：`bun run dev:worker-only`（仅主 Worker）
+
+三种模式均支持可选参数 `--cloud-db` 切到云端数据库：
+
+- 模式1 + 云端数据库：`bun run dev -- --cloud-db`
+- 模式2 + 云端数据库：`bun run dev:no-attempt-worker -- --cloud-db`
+- 模式3 + 云端数据库：`bun run dev:worker-only -- --cloud-db`
+
+模式3 是否受 UI 影响：
+
+- 如果 `apps/ui/dist` 已存在（或之前构建过），Worker 的静态资源绑定可继续使用该构建产物
+- 即使不启动 UI dev server，后端 API `/api/*`、`/v1*` 不受影响
+- 若你需要实时改前端，仍建议启动 `bun run dev:ui`
+
 或分别启动：
 
 ```bash
@@ -138,6 +156,34 @@ bun run dev:ui
 bun run --filter api-worker db:migrate
 ```
 
+### 5) 本地运行并连接云端 D1/KV（可选）
+
+在项目根目录 `.env` 或当前 shell 环境中提供以下 Cloudflare 资源 ID：
+
+- `CLOUDFLARE_D1_DATABASE_ID`（D1 UUID）
+- `CLOUDFLARE_KV_HOT_ID`（KV namespace id，32 位十六进制）
+
+可先复制模板：
+
+```bash
+cp .env.example .env
+```
+
+然后按顺序执行：
+
+```bash
+bun run prepare:remote-config
+bun run db:migrate:remote
+bun run dev:remote-db
+```
+
+说明：
+
+- `prepare:remote-config` 会在本地生成 `apps/worker/.wrangler.remote.toml` 与 `apps/attempt-worker/.wrangler.remote.toml`
+- 这两个文件已加入 `.gitignore`，不会入库
+- 如需单独启动服务，可用 `bun run dev:worker:remote` 与 `bun run dev:attempt-worker:remote`
+- 想切回本地数据库时，继续使用 `bun run dev` + `bun run --filter api-worker db:migrate`
+
 ## 常用命令
 
 ```bash
@@ -146,6 +192,9 @@ bun run typecheck
 bun run lint
 bun run format
 bun run check
+bun run prepare:remote-config
+bun run db:migrate:remote
+bun run dev:remote-db
 ```
 
 ## Agent 协作规范
