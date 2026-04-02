@@ -42,6 +42,7 @@ const scriptPath = fileURLToPath(import.meta.url);
 const stateDir = path.join(process.cwd(), ".dev");
 const statePath = path.join(stateDir, "dev-runner.json");
 const logPath = path.join(stateDir, "dev-runner.log");
+const workerAppDir = path.join(process.cwd(), "apps/worker");
 
 const rawArgs = process.argv.slice(2);
 const interactiveDelegatedMode = rawArgs.includes("--_interactive-run");
@@ -51,8 +52,8 @@ const backgroundMode = runtimeArgs.includes("--bg");
 const statusMode = runtimeArgs.includes("--status");
 const stopMode = runtimeArgs.includes("--stop");
 
-const useRemoteExecution = runtimeArgs.includes("--remote-exec");
-const useRemoteD1 = runtimeArgs.includes("--remote-d1") || useRemoteExecution;
+const useRemoteWorker = runtimeArgs.includes("--remote-worker");
+const useRemoteD1 = runtimeArgs.includes("--remote-d1") || useRemoteWorker;
 const disableHotCache = runtimeArgs.includes("--no-hot-cache");
 const skipAttemptWorker = runtimeArgs.includes("--no-attempt-worker");
 const skipUi = runtimeArgs.includes("--no-ui");
@@ -67,7 +68,7 @@ const devInteractiveBaseOptions = [
 	{ flag: "--no-ui", label: "不启动 UI dev server" },
 	{ flag: "--no-hot-cache", label: "禁用热缓存 KV_HOT" },
 	{ flag: "--remote-d1", label: "连接云端 D1/KV" },
-	{ flag: "--remote-exec", label: "主 worker / attempt-worker 都走远端预览" },
+	{ flag: "--remote-worker", label: "主 worker / attempt-worker 都走远端预览" },
 ];
 
 const devInteractiveUiBuildOptions = [
@@ -395,6 +396,58 @@ const prepareUiBuild = async () => {
 	await runBunScript("build:ui", []);
 };
 
+const stripNamedBlock = (sourceText, header) => {
+	const lines = sourceText.split(/\r?\n/u);
+	const output = [];
+	let skipping = false;
+	for (const line of lines) {
+		const trimmed = line.trim();
+		if (!skipping && trimmed === header) {
+			skipping = true;
+			continue;
+		}
+		if (skipping) {
+			if (trimmed.startsWith("[")) {
+				skipping = false;
+				output.push(line);
+			}
+			continue;
+		}
+		output.push(line);
+	}
+	return `${output.join("\n").replace(/\n+$/u, "")}\n`;
+};
+
+const resolveWorkerBaseConfig = () => {
+	if (useRemoteD1) {
+		return disableHotCache
+			? ".wrangler.remote.no-hot-cache.toml"
+			: ".wrangler.remote.toml";
+	}
+	return disableHotCache
+		? ".wrangler.local.no-hot-cache.toml"
+		: "wrangler.toml";
+};
+
+const ensureWorkerConfigForRun = () => {
+	const baseConfig = resolveWorkerBaseConfig();
+	if (!skipAttemptWorker) {
+		return baseConfig;
+	}
+	const sourcePath = path.join(workerAppDir, baseConfig);
+	const sourceText = readFileSync(sourcePath, "utf8");
+	const strippedText = stripNamedBlock(sourceText, "[[services]]");
+	const outputName = useRemoteD1
+		? disableHotCache
+			? ".wrangler.remote.no-hot-cache.no-attempt-worker.toml"
+			: ".wrangler.remote.no-attempt-worker.toml"
+		: disableHotCache
+			? ".wrangler.local.no-hot-cache.no-attempt-worker.toml"
+			: ".wrangler.local.no-attempt-worker.toml";
+	writeFileSync(path.join(workerAppDir, outputName), strippedText, "utf8");
+	return outputName;
+};
+
 const buildCommands = () => {
 	const commands = [];
 	if (!skipAttemptWorker) {
@@ -409,7 +462,7 @@ const buildCommands = () => {
 		} else if (disableHotCache) {
 			attemptWranglerArgs.push("--config", ".wrangler.local.no-hot-cache.toml");
 		}
-		if (useRemoteExecution) {
+		if (useRemoteWorker) {
 			attemptWranglerArgs.push("--remote");
 		}
 		attemptWranglerArgs.push("--inspector-port", String(attemptInspectorPort));
@@ -421,20 +474,11 @@ const buildCommands = () => {
 		});
 	}
 	const workerWranglerArgs = ["dev", "--port", String(workerPort)];
-	if (useRemoteD1) {
-		workerWranglerArgs.push(
-			"--config",
-			disableHotCache
-				? ".wrangler.remote.no-hot-cache.toml"
-				: ".wrangler.remote.toml",
-		);
-	} else if (disableHotCache) {
-		workerWranglerArgs.push("--config", ".wrangler.local.no-hot-cache.toml");
-	}
-	if (useRemoteExecution) {
+	workerWranglerArgs.push("--config", ensureWorkerConfigForRun());
+	if (useRemoteWorker) {
 		workerWranglerArgs.push("--remote");
 	}
-	if (!skipAttemptWorker && !useRemoteExecution) {
+	if (!skipAttemptWorker && !useRemoteWorker) {
 		workerWranglerArgs.push(
 			"--var",
 			`LOCAL_ATTEMPT_WORKER_URL:http://127.0.0.1:${attemptWorkerPort}`,

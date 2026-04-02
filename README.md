@@ -133,7 +133,7 @@ bun run dev -- [可选参数]
 - `--no-attempt-worker`：不启动调用执行器（attempt-worker）
 - `--no-ui`：不启动 UI dev server
 - `--remote-d1`：连接云端 D1/KV，但主 worker 与 attempt-worker 仍在本地执行
-- `--remote-exec`：主 worker / attempt-worker 都切到远端预览执行（隐含 `--remote-d1`）
+- `--remote-worker`：主 worker / attempt-worker 都切到远端预览执行（隐含 `--remote-d1`）
 - `--no-hot-cache`：仅禁用 `KV_HOT` 热缓存（不影响其他内存级缓存）
 - `--build-ui`：启动前先构建 UI（`bun run build:ui`）
 - `--skip-ui-build`：跳过 UI 预构建（用于覆盖 `--build-ui` 默认行为）
@@ -149,7 +149,7 @@ bun run dev -- [可选参数]
 - 默认启动 + 云端 D1/KV：`bun run dev -- --remote-d1`
 - 仅主 Worker + 云端 D1/KV + 禁用热缓存：`bun run dev -- --no-attempt-worker --no-ui --remote-d1 --no-hot-cache`
 - 后台启动（仅主 Worker + 云端 D1/KV + 禁用热缓存）：`bun run dev -- --no-attempt-worker --no-ui --remote-d1 --no-hot-cache --bg`
-- 远端预览执行：`bun run dev -- --remote-exec`
+- 远端预览执行：`bun run dev -- --remote-worker`
 - 查看后台状态：`bun run dev -- --status`
 - 停止后台实例：`bun run dev -- --stop`
 
@@ -226,7 +226,7 @@ bun run autostart -- status
 - `prepare:remote-config` 会在本地生成 `apps/worker/.wrangler.remote.toml` 与 `apps/attempt-worker/.wrangler.remote.toml`
 - `--remote-d1` 会使用本地执行 + remote bindings，不再默认切到 `wrangler dev --remote`
 - 默认情况下主 worker 会优先走本地 `attempt-worker`（`http://127.0.0.1:<DEV_ATTEMPT_WORKER_PORT>`）
-- 只有显式传入 `--remote-exec` 时，主 worker / attempt-worker 才会改走远端预览执行
+- 只有显式传入 `--remote-worker` 时，主 worker / attempt-worker 才会改走远端预览执行
 - `--no-hot-cache` 会额外生成 no-hot 配置并移除 `KV_HOT` 绑定，仅影响热缓存路径
 - 这两个文件已加入 `.gitignore`，不会入库
 - 如需单独启动服务，可用 `bun --cwd apps/worker run dev:remote` 与 `bun --cwd apps/attempt-worker run dev:remote`

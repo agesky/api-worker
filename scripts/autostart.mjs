@@ -60,7 +60,7 @@ const interactiveEnableOptions = [
 	{ flag: "--no-attempt-worker", label: "不启动调用执行器 attempt-worker" },
 	{ flag: "--no-hot-cache", label: "禁用热缓存 KV_HOT" },
 	{ flag: "--remote-d1", label: "连接云端 D1/KV（执行仍在本地）" },
-	{ flag: "--remote-exec", label: "主 worker / attempt-worker 走远端预览" },
+	{ flag: "--remote-worker", label: "主 worker / attempt-worker 走远端预览" },
 ];
 
 const uiBuildModeOptions = [
