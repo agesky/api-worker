@@ -421,6 +421,8 @@ const printLinuxAutostartStatus = () => {
 		console.log(
 			`后台实例: 运行中（PID ${service.backgroundState.pid}，启动于 ${service.backgroundState.startedAt}）`,
 		);
+	} else if (status.running) {
+		console.log("后台实例: 已运行（由 systemd 直接托管）");
 	} else {
 		console.log("后台实例: 未运行");
 	}
