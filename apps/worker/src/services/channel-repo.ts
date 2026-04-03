@@ -109,9 +109,12 @@ export async function countChannelsByType(
 export async function listActiveChannels(
 	db: D1Database,
 ): Promise<ChannelRow[]> {
+	const nowSeconds = Math.floor(Date.now() / 1000);
 	const rows = await db
-		.prepare("SELECT * FROM channels WHERE status = ?")
-		.bind("active")
+		.prepare(
+			"SELECT * FROM channels WHERE status = ? AND COALESCE(auto_disabled_permanent, 0) = 0 AND (auto_disabled_until IS NULL OR auto_disabled_until <= ?)",
+		)
+		.bind("active", nowSeconds)
 		.all<ChannelRow>();
 	return rows.results ?? [];
 }

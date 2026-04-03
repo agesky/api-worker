@@ -53,7 +53,10 @@ settings.get("/", async (c) => {
 			runtimeSettings.model_failure_cooldown_minutes,
 		proxy_model_failure_cooldown_threshold:
 			runtimeSettings.model_failure_cooldown_threshold,
+		proxy_retry_return_error_codes: runtimeSettings.retry_return_error_codes,
 		channel_disable_error_codes: runtimeSettings.channel_disable_error_codes,
+		channel_permanent_disable_error_codes:
+			runtimeSettings.channel_permanent_disable_error_codes,
 		channel_disable_error_threshold:
 			runtimeSettings.channel_disable_error_threshold,
 		channel_disable_error_code_minutes:
@@ -83,7 +86,9 @@ settings.put("/", async (c) => {
 		retry_max_retries?: number;
 		retry_sleep_ms?: number;
 		retry_sleep_error_codes?: string[];
+		retry_return_error_codes?: string[];
 		channel_disable_error_codes?: string[];
+		channel_permanent_disable_error_codes?: string[];
 		channel_disable_error_threshold?: number;
 		channel_disable_error_code_minutes?: number;
 		zero_completion_as_error_enabled?: boolean;
@@ -194,6 +199,22 @@ settings.put("/", async (c) => {
 		runtimeTouched = true;
 	}
 
+	if (body.proxy_retry_return_error_codes !== undefined) {
+		const normalized = normalizeErrorCodeList(
+			body.proxy_retry_return_error_codes,
+		);
+		if (!normalized) {
+			return jsonError(
+				c,
+				400,
+				"invalid_proxy_retry_return_error_codes",
+				"invalid_proxy_retry_return_error_codes",
+			);
+		}
+		runtimePatch.retry_return_error_codes = normalized;
+		runtimeTouched = true;
+	}
+
 	if (body.channel_disable_error_codes !== undefined) {
 		const normalized = normalizeErrorCodeList(body.channel_disable_error_codes);
 		if (!normalized) {
@@ -205,6 +226,22 @@ settings.put("/", async (c) => {
 			);
 		}
 		runtimePatch.channel_disable_error_codes = normalized;
+		runtimeTouched = true;
+	}
+
+	if (body.channel_permanent_disable_error_codes !== undefined) {
+		const normalized = normalizeErrorCodeList(
+			body.channel_permanent_disable_error_codes,
+		);
+		if (!normalized) {
+			return jsonError(
+				c,
+				400,
+				"invalid_channel_permanent_disable_error_codes",
+				"invalid_channel_permanent_disable_error_codes",
+			);
+		}
+		runtimePatch.channel_permanent_disable_error_codes = normalized;
 		runtimeTouched = true;
 	}
 
@@ -462,7 +499,11 @@ settings.put("/", async (c) => {
 
 	if (body.site_task_timeout_ms !== undefined) {
 		const timeoutMs = Number(body.site_task_timeout_ms);
-		if (Number.isNaN(timeoutMs) || timeoutMs < 1 || !Number.isInteger(timeoutMs)) {
+		if (
+			Number.isNaN(timeoutMs) ||
+			timeoutMs < 1 ||
+			!Number.isInteger(timeoutMs)
+		) {
 			return jsonError(
 				c,
 				400,

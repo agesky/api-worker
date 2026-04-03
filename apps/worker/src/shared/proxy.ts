@@ -32,6 +32,7 @@ import {
 import {
 	listCoolingDownChannelsForModel,
 	listVerifiedModelsByChannel,
+	recordChannelDisableHit,
 } from "../../../worker/src/services/channel-model-capabilities";
 import {
 	type ChannelRecord,
@@ -49,6 +50,11 @@ import {
 	writeHotJson,
 } from "../../../worker/src/services/hot-kv";
 import { shouldCooldown } from "../../../worker/src/services/model-cooldown";
+import {
+	buildProxyErrorCodeSet,
+	resolveProxyErrorAction,
+	type ProxyErrorAction,
+} from "../../../worker/src/services/proxy-error-policy";
 import {
 	applyGeminiModelToPath,
 	buildUpstreamChatRequest,
@@ -166,6 +172,7 @@ const ATTEMPT_BINDING_RESPONSE_PATH_HEADER = "x-ha-attempt-response-path";
 const ATTEMPT_BINDING_LATENCY_HEADER = "x-ha-attempt-latency-ms";
 const ATTEMPT_BINDING_UPSTREAM_REQUEST_ID_HEADER =
 	"x-ha-attempt-upstream-request-id";
+const ATTEMPT_DISPATCH_ERROR_ACTION_HEADER = "x-ha-dispatch-error-action";
 const ATTEMPT_ERROR_CODE_HEADER = "x-ha-attempt-error-code";
 const ATTEMPT_STREAM_USAGE_PROCESSED_HEADER =
 	"x-ha-attempt-stream-usage-processed";
@@ -1512,54 +1519,6 @@ function sleep(delayMs: number): Promise<void> {
 	});
 }
 
-function normalizeRetryErrorCode(value: string | null): string {
-	return normalizeMessage(value)?.toLowerCase() ?? "";
-}
-
-function isNoAvailableChannelMessage(message: string | null): boolean {
-	const normalized = normalizeMessage(message)?.toLowerCase() ?? "";
-	if (!normalized) {
-		return false;
-	}
-	return (
-		normalized.includes("no available channel") ||
-		normalized.includes("无可用渠道") ||
-		normalized.includes("no available providers") ||
-		normalized.includes("无可用供应商")
-	);
-}
-
-function buildRetryErrorCodeSet(codes: string[]): Set<string> {
-	const normalized = codes
-		.map((code) => normalizeRetryErrorCode(code))
-		.filter((code) => code.length > 0);
-	return new Set(normalized);
-}
-
-function resolveRetryDecision(
-	sleepErrorCodeSet: Set<string>,
-	sleepMs: number,
-	errorCode: string | null,
-	errorMessage: string | null,
-): number {
-	const normalizedErrorCode = normalizeRetryErrorCode(errorCode);
-	const lookupKeys: string[] = [];
-	if (normalizedErrorCode === "pond_hub_error") {
-		if (isNoAvailableChannelMessage(errorMessage)) {
-			lookupKeys.push("model_not_found");
-		}
-	}
-	if (normalizedErrorCode) {
-		lookupKeys.push(normalizedErrorCode);
-	}
-	for (const key of lookupKeys) {
-		if (sleepErrorCodeSet.has(key)) {
-			return Math.max(0, Math.floor(sleepMs));
-		}
-	}
-	return 0;
-}
-
 function buildAttemptSequence(
 	candidates: ChannelRecord[],
 	maxAttempts: number,
@@ -2149,7 +2108,8 @@ type AttemptDispatchRequest = {
 
 type DispatchRetryConfig = {
 	sleepMs: number;
-	skipErrorCodes: string[];
+	disableErrorCodes: string[];
+	returnErrorCodes: string[];
 	sleepErrorCodes: string[];
 };
 
@@ -2176,6 +2136,7 @@ type DispatchBindingSuccess = {
 	attemptIndex: number;
 	channelId: string | null;
 	stopRetry: boolean;
+	errorAction: ProxyErrorAction;
 };
 
 type AttemptBindingFailure = {
@@ -2272,6 +2233,18 @@ function parseBooleanHeader(value: string | null): boolean {
 	}
 	const normalized = value.trim().toLowerCase();
 	return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+function parseErrorActionHeader(value: string | null): ProxyErrorAction {
+	const normalized = value?.trim().toLowerCase();
+	if (
+		normalized === "sleep" ||
+		normalized === "disable" ||
+		normalized === "return"
+	) {
+		return normalized;
+	}
+	return "retry";
 }
 
 type HeaderLookup = {
@@ -2594,6 +2567,9 @@ async function executeDispatchViaWorker(
 			stopRetry: parseBooleanHeader(
 				response.headers.get(ATTEMPT_DISPATCH_STOP_RETRY_HEADER),
 			),
+			errorAction: parseErrorActionHeader(
+				response.headers.get(ATTEMPT_DISPATCH_ERROR_ACTION_HEADER),
+			),
 		};
 	} catch (error) {
 		const errorMessage = normalizeMessage(
@@ -2675,15 +2651,26 @@ proxy.all("/*", tokenAuth, async (c) => {
 		0,
 		Math.floor(Number(runtimeSettings.retry_sleep_ms ?? 0)),
 	);
-	const retrySleepErrorCodeSet = buildRetryErrorCodeSet(
+	const retrySleepErrorCodeSet = buildProxyErrorCodeSet(
 		runtimeSettings.retry_sleep_error_codes ?? [],
 	);
-	const channelDisableErrorCodeSet = buildRetryErrorCodeSet(
+	const retryReturnErrorCodeSet = buildProxyErrorCodeSet(
+		runtimeSettings.retry_return_error_codes ?? [],
+	);
+	const channelDisableErrorCodeSet = buildProxyErrorCodeSet(
 		runtimeSettings.channel_disable_error_codes ?? [],
 	);
+	const channelPermanentDisableErrorCodeSet = buildProxyErrorCodeSet(
+		runtimeSettings.channel_permanent_disable_error_codes ?? [],
+	);
+	const disableActionErrorCodeSet = new Set([
+		...channelDisableErrorCodeSet,
+		...channelPermanentDisableErrorCodeSet,
+	]);
 	const dispatchRetryConfig: DispatchRetryConfig = {
 		sleepMs: retrySleepMs,
-		skipErrorCodes: [],
+		disableErrorCodes: Array.from(disableActionErrorCodeSet),
+		returnErrorCodes: Array.from(retryReturnErrorCodeSet),
 		sleepErrorCodes: Array.from(retrySleepErrorCodeSet),
 	};
 	const attemptBindingPolicy: AttemptBindingPolicy = {
@@ -3042,7 +3029,7 @@ proxy.all("/*", tokenAuth, async (c) => {
 		const selectionNowSeconds = Math.floor(Date.now() / 1000);
 		const activeChannels = await db
 			.prepare(
-				"SELECT * FROM channels WHERE status = ? AND (auto_disabled_until IS NULL OR auto_disabled_until <= ?)",
+				"SELECT * FROM channels WHERE status = ? AND COALESCE(auto_disabled_permanent, 0) = 0 AND (auto_disabled_until IS NULL OR auto_disabled_until <= ?)",
 			)
 			.bind("active", selectionNowSeconds)
 			.all<ChannelRecord>();
@@ -3391,6 +3378,7 @@ proxy.all("/*", tokenAuth, async (c) => {
 	let selectedAttemptUpstreamRequestId: string | null = null;
 	let lastErrorDetails: ErrorDetails | null = null;
 	let attemptsExecuted = 0;
+	const blockedChannelIds = new Set<string>();
 	const parseStreamUsageOnFailure = async (response: Response) => {
 		if (
 			!isStream ||
@@ -3438,22 +3426,62 @@ proxy.all("/*", tokenAuth, async (c) => {
 			latencyMs: options.latencyMs,
 		});
 	};
-	const scheduleModelError = (options: {
+	const resolveFailureAction = (
+		errorCode: string | null,
+		errorMessage: string | null,
+	): ProxyErrorAction =>
+		resolveProxyErrorAction(
+			{
+				sleepErrorCodeSet: retrySleepErrorCodeSet,
+				disableErrorCodeSet: disableActionErrorCodeSet,
+				returnErrorCodeSet: retryReturnErrorCodeSet,
+			},
+			errorCode,
+			errorMessage,
+		);
+	const applyDisableAction = async (options: {
+		channelId: string;
+		errorCode: string;
+	}): Promise<void> => {
+		blockedChannelIds.add(options.channelId);
+		const normalizedErrorCode = options.errorCode.trim().toLowerCase();
+		const disableResult = await recordChannelDisableHit(
+			db,
+			options.channelId,
+			normalizedErrorCode,
+			{
+				disableDurationSeconds: channelDisableDurationSeconds,
+				disableThreshold: channelDisableThreshold,
+				permanentDisable:
+					channelPermanentDisableErrorCodeSet.has(normalizedErrorCode),
+			},
+			nowSeconds,
+		);
+		if (
+			disableResult.channelTempDisabled ||
+			disableResult.channelPermanentlyDisabled
+		) {
+			await invalidateSelectionHotCache(c.env.KV_HOT);
+		}
+	};
+	const scheduleModelCooldown = (options: {
 		channelId: string;
 		model: string | null;
 		upstreamStatus: number | null;
 		errorCode: string | null;
+		errorMessage: string | null;
 	}) => {
+		const action = resolveFailureAction(
+			options.errorCode,
+			options.errorMessage,
+		);
+		if (action === "disable" || action === "return") {
+			return;
+		}
 		if (!shouldCooldown(options.upstreamStatus, options.errorCode)) {
 			return;
 		}
-		const normalizedErrorCode = normalizeRetryErrorCode(options.errorCode);
-		const channelDisableMatched =
-			normalizedErrorCode.length > 0 &&
-			channelDisableErrorCodeSet.has(normalizedErrorCode);
-		const shouldRecordModelCooldown =
-			Boolean(options.model) && cooldownSeconds > 0;
-		if (!shouldRecordModelCooldown && !channelDisableMatched) {
+		if (!options.model || cooldownSeconds <= 0) {
 			return;
 		}
 		scheduleUsageEvent({
@@ -3466,33 +3494,33 @@ proxy.all("/*", tokenAuth, async (c) => {
 					(options.upstreamStatus === null
 						? ABNORMAL_SUCCESS_RESPONSE_ERROR_CODE
 						: String(options.upstreamStatus)),
-				cooldownSeconds: shouldRecordModelCooldown ? cooldownSeconds : 0,
+				cooldownSeconds,
 				cooldownFailureThreshold,
-				channelDisableMatched,
-				channelDisableDurationSeconds,
-				channelDisableThreshold,
 				nowSeconds,
 			},
 		});
 	};
 	const continueAfterFailure = async (
-		errorCode: string | null,
-		errorMessage: string | null,
 		attemptNumber: number,
+		action: ProxyErrorAction,
 	): Promise<boolean> => {
 		if (attemptNumber >= ordered.length) {
 			return false;
 		}
-		const decisionSleepMs = resolveRetryDecision(
-			retrySleepErrorCodeSet,
-			retrySleepMs,
-			errorCode,
-			errorMessage,
-		);
-		if (decisionSleepMs > 0) {
-			await sleep(decisionSleepMs);
+		if (action === "sleep" && retrySleepMs > 0) {
+			await sleep(retrySleepMs);
 		}
 		return true;
+	};
+	const buildDirectErrorResponse = (
+		status: number | null,
+		errorCode: string,
+	): Response => {
+		responseAttemptCount = attemptsExecuted;
+		const responseStatus = (
+			status !== null && status >= 400 ? status : 502
+		) as Parameters<typeof jsonError>[1];
+		return jsonErrorWithTrace(responseStatus, errorCode, errorCode);
 	};
 	const responsesToolCallMismatchChannels: string[] = [];
 	const streamOptionsCapabilityMemo = new Map<
@@ -3916,27 +3944,38 @@ proxy.all("/*", tokenAuth, async (c) => {
 								errorMessage: abnormalResponse.errorMessage,
 								latencyMs: attemptLatencyMs,
 							});
-							scheduleModelError({
+							scheduleModelCooldown({
 								channelId: meta.channel.id,
 								model: meta.recordModel,
 								upstreamStatus: response.status,
 								errorCode: abnormalResponse.errorCode,
+								errorMessage: abnormalResponse.errorMessage,
 							});
 							if (downstreamModel && downstreamModel !== meta.recordModel) {
-								scheduleModelError({
+								scheduleModelCooldown({
 									channelId: meta.channel.id,
 									model: downstreamModel,
 									upstreamStatus: response.status,
 									errorCode: abnormalResponse.errorCode,
+									errorMessage: abnormalResponse.errorMessage,
 								});
 							}
-							if (
-								!(await continueAfterFailure(
+							const action = resolveFailureAction(
+								abnormalResponse.errorCode,
+								abnormalResponse.errorMessage,
+							);
+							if (action === "return") {
+								return buildDirectErrorResponse(
+									response.status,
 									abnormalResponse.errorCode,
-									abnormalResponse.errorMessage,
-									attemptNumber,
-								))
-							) {
+								);
+							}
+							if (action === "disable") {
+								await applyDisableAction({
+									channelId: meta.channel.id,
+									errorCode: abnormalResponse.errorCode,
+								});
+							} else if (!(await continueAfterFailure(attemptNumber, action))) {
 								dispatchStopRetry = true;
 							}
 						} else {
@@ -3994,12 +4033,23 @@ proxy.all("/*", tokenAuth, async (c) => {
 									errorMessage: usageMissingMessage,
 									latencyMs: attemptLatencyMs,
 								});
-								if (
-									!(await continueAfterFailure(
+								const action = resolveFailureAction(
+									usageMissingCode,
+									usageMissingMessage,
+								);
+								if (action === "return") {
+									return buildDirectErrorResponse(
+										response.status,
 										usageMissingCode,
-										usageMissingMessage,
-										attemptNumber,
-									))
+									);
+								}
+								if (action === "disable") {
+									await applyDisableAction({
+										channelId: meta.channel.id,
+										errorCode: usageMissingCode,
+									});
+								} else if (
+									!(await continueAfterFailure(attemptNumber, action))
 								) {
 									dispatchStopRetry = true;
 								}
@@ -4052,12 +4102,23 @@ proxy.all("/*", tokenAuth, async (c) => {
 									errorMessage: zeroCompletionMessage,
 									latencyMs: attemptLatencyMs,
 								});
-								if (
-									!(await continueAfterFailure(
+								const action = resolveFailureAction(
+									USAGE_ZERO_COMPLETION_TOKENS_ERROR_CODE,
+									zeroCompletionMessage,
+								);
+								if (action === "return") {
+									return buildDirectErrorResponse(
+										response.status,
 										USAGE_ZERO_COMPLETION_TOKENS_ERROR_CODE,
-										zeroCompletionMessage,
-										attemptNumber,
-									))
+									);
+								}
+								if (action === "disable") {
+									await applyDisableAction({
+										channelId: meta.channel.id,
+										errorCode: USAGE_ZERO_COMPLETION_TOKENS_ERROR_CODE,
+									});
+								} else if (
+									!(await continueAfterFailure(attemptNumber, action))
 								) {
 									dispatchStopRetry = true;
 								}
@@ -4200,17 +4261,32 @@ proxy.all("/*", tokenAuth, async (c) => {
 							errorMessage: normalizedErrorMessage,
 							latencyMs: attemptLatencyMs,
 						});
-						scheduleModelError({
+						scheduleModelCooldown({
 							channelId: meta.channel.id,
 							model: meta.recordModel,
 							upstreamStatus: response.status,
 							errorCode: finalErrorCode,
+							errorMessage: normalizedErrorMessage,
 						});
 						if (downstreamModel && downstreamModel !== meta.recordModel) {
-							scheduleModelError({
+							scheduleModelCooldown({
 								channelId: meta.channel.id,
 								model: downstreamModel,
 								upstreamStatus: response.status,
+								errorCode: finalErrorCode,
+								errorMessage: normalizedErrorMessage,
+							});
+						}
+						const action =
+							dispatchResult.errorAction !== "retry"
+								? dispatchResult.errorAction
+								: resolveFailureAction(finalErrorCode, normalizedErrorMessage);
+						if (action === "return") {
+							return buildDirectErrorResponse(response.status, finalErrorCode);
+						}
+						if (action === "disable") {
+							await applyDisableAction({
+								channelId: meta.channel.id,
 								errorCode: finalErrorCode,
 							});
 						}
@@ -4224,7 +4300,10 @@ proxy.all("/*", tokenAuth, async (c) => {
 	}
 	if (!dispatchHandled) {
 		for (const [attemptIndex, channel] of ordered.entries()) {
-			if (attemptIndex < attemptsExecuted) {
+			if (
+				attemptIndex < attemptsExecuted ||
+				blockedChannelIds.has(channel.id)
+			) {
 				continue;
 			}
 			const attemptNumber = attemptIndex + 1;
@@ -4508,13 +4587,26 @@ proxy.all("/*", tokenAuth, async (c) => {
 						errorMessage: attemptResult.errorMessage,
 						latencyMs: attemptResult.latencyMs,
 					});
-					if (
-						!(await continueAfterFailure(
+					const action = resolveFailureAction(
+						attemptResult.errorCode,
+						attemptResult.errorMessage,
+					);
+					if (action === "return") {
+						return buildDirectErrorResponse(
+							attemptResult.kind === "attempt_worker_error"
+								? attemptResult.httpStatus
+								: 503,
 							attemptResult.errorCode,
-							attemptResult.errorMessage,
-							attemptNumber,
-						))
-					) {
+						);
+					}
+					if (action === "disable") {
+						await applyDisableAction({
+							channelId: channel.id,
+							errorCode: attemptResult.errorCode,
+						});
+						continue;
+					}
+					if (!(await continueAfterFailure(attemptNumber, action))) {
 						break;
 					}
 					continue;
@@ -4617,13 +4709,26 @@ proxy.all("/*", tokenAuth, async (c) => {
 								errorMessage: retried.errorMessage,
 								latencyMs: retried.latencyMs,
 							});
-							if (
-								!(await continueAfterFailure(
+							const action = resolveFailureAction(
+								retried.errorCode,
+								retried.errorMessage,
+							);
+							if (action === "return") {
+								return buildDirectErrorResponse(
+									retried.kind === "attempt_worker_error"
+										? retried.httpStatus
+										: 503,
 									retried.errorCode,
-									retried.errorMessage,
-									attemptNumber,
-								))
-							) {
+								);
+							}
+							if (action === "disable") {
+								await applyDisableAction({
+									channelId: channel.id,
+									errorCode: retried.errorCode,
+								});
+								continue;
+							}
+							if (!(await continueAfterFailure(attemptNumber, action))) {
 								break;
 							}
 							continue;
@@ -4709,27 +4814,40 @@ proxy.all("/*", tokenAuth, async (c) => {
 							errorMessage: abnormalResponse.errorMessage,
 							latencyMs: attemptLatencyMs,
 						});
-						scheduleModelError({
+						scheduleModelCooldown({
 							channelId: channel.id,
 							model: recordModel,
 							upstreamStatus: response.status,
 							errorCode: abnormalResponse.errorCode,
+							errorMessage: abnormalResponse.errorMessage,
 						});
 						if (downstreamModel && downstreamModel !== recordModel) {
-							scheduleModelError({
+							scheduleModelCooldown({
 								channelId: channel.id,
 								model: downstreamModel,
 								upstreamStatus: response.status,
 								errorCode: abnormalResponse.errorCode,
+								errorMessage: abnormalResponse.errorMessage,
 							});
 						}
-						if (
-							!(await continueAfterFailure(
+						const action = resolveFailureAction(
+							abnormalResponse.errorCode,
+							abnormalResponse.errorMessage,
+						);
+						if (action === "return") {
+							return buildDirectErrorResponse(
+								response.status,
 								abnormalResponse.errorCode,
-								abnormalResponse.errorMessage,
-								attemptNumber,
-							))
-						) {
+							);
+						}
+						if (action === "disable") {
+							await applyDisableAction({
+								channelId: channel.id,
+								errorCode: abnormalResponse.errorCode,
+							});
+							continue;
+						}
+						if (!(await continueAfterFailure(attemptNumber, action))) {
 							break;
 						}
 						continue;
@@ -4787,13 +4905,24 @@ proxy.all("/*", tokenAuth, async (c) => {
 							errorMessage: usageMissingMessage,
 							latencyMs: attemptLatencyMs,
 						});
-						if (
-							!(await continueAfterFailure(
+						const action = resolveFailureAction(
+							usageMissingCode,
+							usageMissingMessage,
+						);
+						if (action === "return") {
+							return buildDirectErrorResponse(
+								response.status,
 								usageMissingCode,
-								usageMissingMessage,
-								attemptNumber,
-							))
-						) {
+							);
+						}
+						if (action === "disable") {
+							await applyDisableAction({
+								channelId: channel.id,
+								errorCode: usageMissingCode,
+							});
+							continue;
+						}
+						if (!(await continueAfterFailure(attemptNumber, action))) {
 							break;
 						}
 						continue;
@@ -4847,13 +4976,24 @@ proxy.all("/*", tokenAuth, async (c) => {
 							errorMessage: zeroCompletionMessage,
 							latencyMs: attemptLatencyMs,
 						});
-						if (
-							!(await continueAfterFailure(
+						const action = resolveFailureAction(
+							USAGE_ZERO_COMPLETION_TOKENS_ERROR_CODE,
+							zeroCompletionMessage,
+						);
+						if (action === "return") {
+							return buildDirectErrorResponse(
+								response.status,
 								USAGE_ZERO_COMPLETION_TOKENS_ERROR_CODE,
-								zeroCompletionMessage,
-								attemptNumber,
-							))
-						) {
+							);
+						}
+						if (action === "disable") {
+							await applyDisableAction({
+								channelId: channel.id,
+								errorCode: USAGE_ZERO_COMPLETION_TOKENS_ERROR_CODE,
+							});
+							continue;
+						}
+						if (!(await continueAfterFailure(attemptNumber, action))) {
 							break;
 						}
 						continue;
@@ -4998,27 +5138,37 @@ proxy.all("/*", tokenAuth, async (c) => {
 					latencyMs: attemptLatencyMs,
 				});
 
-				scheduleModelError({
+				scheduleModelCooldown({
 					channelId: channel.id,
 					model: recordModel,
 					upstreamStatus: response.status,
 					errorCode: finalErrorCode,
+					errorMessage: normalizedErrorMessage,
 				});
 				if (downstreamModel && downstreamModel !== recordModel) {
-					scheduleModelError({
+					scheduleModelCooldown({
 						channelId: channel.id,
 						model: downstreamModel,
 						upstreamStatus: response.status,
 						errorCode: finalErrorCode,
+						errorMessage: normalizedErrorMessage,
 					});
 				}
-				if (
-					!(await continueAfterFailure(
-						finalErrorCode,
-						normalizedErrorMessage,
-						attemptNumber,
-					))
-				) {
+				const action = resolveFailureAction(
+					finalErrorCode,
+					normalizedErrorMessage,
+				);
+				if (action === "return") {
+					return buildDirectErrorResponse(response.status, finalErrorCode);
+				}
+				if (action === "disable") {
+					await applyDisableAction({
+						channelId: channel.id,
+						errorCode: finalErrorCode,
+					});
+					continue;
+				}
+				if (!(await continueAfterFailure(attemptNumber, action))) {
 					break;
 				}
 			} catch (error) {
@@ -5084,27 +5234,37 @@ proxy.all("/*", tokenAuth, async (c) => {
 					latencyMs: attemptLatencyMs,
 				});
 
-				scheduleModelError({
+				scheduleModelCooldown({
 					channelId: channel.id,
 					model: recordModel,
 					upstreamStatus: null,
 					errorCode: usageErrorCode,
+					errorMessage: usageErrorMessage,
 				});
 				if (downstreamModel && downstreamModel !== recordModel) {
-					scheduleModelError({
+					scheduleModelCooldown({
 						channelId: channel.id,
 						model: downstreamModel,
 						upstreamStatus: null,
 						errorCode: usageErrorCode,
+						errorMessage: usageErrorMessage,
 					});
 				}
-				if (
-					!(await continueAfterFailure(
+				const action = resolveFailureAction(usageErrorCode, usageErrorMessage);
+				if (action === "return") {
+					return buildDirectErrorResponse(
+						isTimeout ? 504 : 502,
 						usageErrorCode,
-						usageErrorMessage,
-						attemptNumber,
-					))
-				) {
+					);
+				}
+				if (action === "disable") {
+					await applyDisableAction({
+						channelId: channel.id,
+						errorCode: usageErrorCode,
+					});
+					continue;
+				}
+				if (!(await continueAfterFailure(attemptNumber, action))) {
 					break;
 				}
 			}

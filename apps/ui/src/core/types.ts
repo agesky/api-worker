@@ -129,7 +129,9 @@ export type Settings = {
 	channel_recovery_probe_schedule_time?: string;
 	proxy_model_failure_cooldown_minutes?: number;
 	proxy_model_failure_cooldown_threshold?: number;
+	proxy_retry_return_error_codes?: string[];
 	channel_disable_error_codes?: string[];
+	channel_permanent_disable_error_codes?: string[];
 	channel_disable_error_threshold?: number;
 	channel_disable_error_code_minutes?: number;
 	runtime_settings?: RuntimeProxySettings;
@@ -198,7 +200,9 @@ export type RuntimeProxySettings = {
 	retry_max_retries: number;
 	retry_sleep_ms: number;
 	retry_sleep_error_codes: string[];
+	retry_return_error_codes: string[];
 	channel_disable_error_codes: string[];
+	channel_permanent_disable_error_codes: string[];
 	channel_disable_error_threshold: number;
 	channel_disable_error_code_minutes: number;
 	zero_completion_as_error_enabled: boolean;
@@ -293,7 +297,9 @@ export type SettingsForm = {
 	proxy_retry_max_retries: string;
 	proxy_retry_sleep_ms: string;
 	proxy_retry_sleep_error_codes: string[];
+	proxy_retry_return_error_codes: string[];
 	proxy_zero_completion_as_error_enabled: boolean;
+	channel_permanent_disable_error_codes: string[];
 	proxy_stream_usage_mode: string;
 	proxy_stream_usage_max_parsers: string;
 	proxy_stream_usage_parse_timeout_ms: string;

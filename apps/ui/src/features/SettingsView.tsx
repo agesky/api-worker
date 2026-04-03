@@ -189,12 +189,26 @@ export const SettingsView = ({
 				all.add(normalized);
 			}
 		}
+		for (const code of settingsForm.proxy_retry_return_error_codes) {
+			const normalized = String(code ?? "").trim();
+			if (normalized) {
+				all.add(normalized);
+			}
+		}
+		for (const code of settingsForm.channel_permanent_disable_error_codes) {
+			const normalized = String(code ?? "").trim();
+			if (normalized) {
+				all.add(normalized);
+			}
+		}
 		return Array.from(all)
 			.sort((left, right) => left.localeCompare(right))
 			.map((code) => ({ value: code, label: code }));
 	}, [
 		retryErrorCodeOptions,
 		settingsForm.channel_disable_error_codes,
+		settingsForm.channel_permanent_disable_error_codes,
+		settingsForm.proxy_retry_return_error_codes,
 		settingsForm.proxy_retry_sleep_error_codes,
 	]);
 	const backupStatusLabel =
@@ -509,10 +523,33 @@ export const SettingsView = ({
 						<div class="app-settings-row app-settings-row--stack">
 							<div class="app-settings-row__main">
 								<span class="app-settings-row__label">
-									触发渠道禁用的错误码
+									不重试直接返回的错误码
 								</span>
 								<p class="app-settings-row__hint">
-									命中后会累计禁用次数并执行临时禁用
+									命中后立即返回错误，不再继续本地重试
+								</p>
+							</div>
+							<MultiSelect
+								class="app-settings-row__control app-settings-row__control--full"
+								options={mergedRetryErrorCodeOptions}
+								value={settingsForm.proxy_retry_return_error_codes}
+								placeholder="选择直接返回的错误码"
+								searchPlaceholder="搜索错误码"
+								emptyLabel="暂无可选错误码"
+								onChange={(next) => {
+									onFormChange({
+										proxy_retry_return_error_codes: next,
+									});
+								}}
+							/>
+						</div>
+						<div class="app-settings-row app-settings-row--stack">
+							<div class="app-settings-row__main">
+								<span class="app-settings-row__label">
+									触发临时封禁的错误码
+								</span>
+								<p class="app-settings-row__hint">
+									命中后会累计封禁次数，并按时长进入临时封禁
 								</p>
 							</div>
 							<MultiSelect
@@ -525,6 +562,29 @@ export const SettingsView = ({
 								onChange={(next) => {
 									onFormChange({
 										channel_disable_error_codes: next,
+									});
+								}}
+							/>
+						</div>
+						<div class="app-settings-row app-settings-row--stack">
+							<div class="app-settings-row__main">
+								<span class="app-settings-row__label">
+									触发永久封禁的错误码
+								</span>
+								<p class="app-settings-row__hint">
+									命中阈值后直接进入永久封禁，不再自动恢复
+								</p>
+							</div>
+							<MultiSelect
+								class="app-settings-row__control app-settings-row__control--full"
+								options={mergedRetryErrorCodeOptions}
+								value={settingsForm.channel_permanent_disable_error_codes}
+								placeholder="选择永久封禁的错误码"
+								searchPlaceholder="搜索错误码"
+								emptyLabel="暂无可选错误码"
+								onChange={(next) => {
+									onFormChange({
+										channel_permanent_disable_error_codes: next,
 									});
 								}}
 							/>
@@ -611,7 +671,7 @@ export const SettingsView = ({
 									渠道禁用阈值（次数）
 								</label>
 								<p class="app-settings-row__hint">
-									命中禁用错误码累计达到该次数后，将直接禁用渠道
+									命中封禁错误码累计达到该次数后，会按错误分类进入临时或永久封禁
 								</p>
 							</div>
 							<Input

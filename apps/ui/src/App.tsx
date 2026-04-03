@@ -179,8 +179,14 @@ const buildRecommendedSettingsForm = (
 	channel_disable_error_codes: [
 		...initialSettingsForm.channel_disable_error_codes,
 	],
+	channel_permanent_disable_error_codes: [
+		...initialSettingsForm.channel_permanent_disable_error_codes,
+	],
 	proxy_retry_sleep_error_codes: [
 		...initialSettingsForm.proxy_retry_sleep_error_codes,
+	],
+	proxy_retry_return_error_codes: [
+		...initialSettingsForm.proxy_retry_return_error_codes,
 	],
 	proxy_retry_max_retries: "3",
 	channel_recovery_probe_enabled: true,
@@ -782,10 +788,15 @@ const App = () => {
 			),
 			channel_disable_error_codes:
 				runtimeSettings?.channel_disable_error_codes ?? [
-					"upstream_http_401",
-					"upstream_http_403",
 					"do_request_failed",
 					"proxy_upstream_fetch_exception",
+					"model_not_found",
+					"stream_options_unsupported",
+				],
+			channel_permanent_disable_error_codes:
+				runtimeSettings?.channel_permanent_disable_error_codes ?? [
+					"upstream_http_401",
+					"upstream_http_403",
 				],
 			channel_disable_error_threshold: String(
 				runtimeSettings?.channel_disable_error_threshold ?? 3,
@@ -802,6 +813,19 @@ const App = () => {
 				runtimeSettings?.retry_sleep_error_codes ?? [
 					"system_cpu_overloaded",
 					"system_disk_overloaded",
+				],
+			proxy_retry_return_error_codes:
+				runtimeSettings?.retry_return_error_codes ?? [
+					"no_available_channels",
+					"upstream_cooldown",
+					"responses_previous_response_id_required",
+					"responses_affinity_missing",
+					"responses_affinity_channel_disabled",
+					"responses_affinity_channel_not_allowed",
+					"responses_affinity_channel_model_unavailable",
+					"responses_affinity_channel_cooldown",
+					"responses_tool_call_chain_mismatch",
+					"invalid_function_parameters",
 				],
 			proxy_zero_completion_as_error_enabled:
 				runtimeSettings?.zero_completion_as_error_enabled ?? true,
@@ -1556,6 +1580,12 @@ const App = () => {
 			const retrySleepErrorCodes = normalizeErrorCodeList(
 				settingsForm.proxy_retry_sleep_error_codes,
 			);
+			const retryReturnErrorCodes = normalizeErrorCodeList(
+				settingsForm.proxy_retry_return_error_codes,
+			);
+			const channelPermanentDisableErrorCodes = normalizeErrorCodeList(
+				settingsForm.channel_permanent_disable_error_codes,
+			);
 			const streamUsageMode = settingsForm.proxy_stream_usage_mode
 				.trim()
 				.toLowerCase();
@@ -1738,6 +1768,9 @@ const App = () => {
 				proxy_retry_max_retries: retryMaxRetries,
 				proxy_retry_sleep_ms: retrySleepMs,
 				proxy_retry_sleep_error_codes: retrySleepErrorCodes,
+				proxy_retry_return_error_codes: retryReturnErrorCodes,
+				channel_permanent_disable_error_codes:
+					channelPermanentDisableErrorCodes,
 				proxy_zero_completion_as_error_enabled:
 					settingsForm.proxy_zero_completion_as_error_enabled,
 				proxy_stream_usage_mode: streamUsageMode,

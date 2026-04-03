@@ -1,7 +1,6 @@
 import type { D1Database } from "@cloudflare/workers-types";
 import { type AttemptLogInput, insertAttemptEvent } from "./attempt-events";
 import {
-	recordChannelDisableHit,
 	recordChannelModelError,
 	upsertChannelModelCapabilities,
 } from "./channel-model-capabilities";
@@ -29,9 +28,6 @@ export type UsageEvent =
 				errorCode: string;
 				cooldownSeconds: number;
 				cooldownFailureThreshold: number;
-				channelDisableMatched: boolean;
-				channelDisableDurationSeconds: number;
-				channelDisableThreshold: number;
 				nowSeconds?: number;
 			};
 	  }
@@ -71,9 +67,8 @@ export async function processUsageEvent(
 	}
 	if (event.type === "model_error") {
 		const nowSeconds = resolveNowSeconds(event.payload.nowSeconds);
-		let channelDisabled = false;
 		if (event.payload.model && event.payload.cooldownSeconds > 0) {
-			const result = await recordChannelModelError(
+			await recordChannelModelError(
 				db,
 				event.payload.channelId,
 				event.payload.model,
@@ -84,26 +79,9 @@ export async function processUsageEvent(
 				},
 				nowSeconds,
 			);
-			channelDisabled = result.channelDisabled;
-		}
-		if (event.payload.channelDisableMatched) {
-			const disableResult = await recordChannelDisableHit(
-				db,
-				event.payload.channelId,
-				event.payload.errorCode,
-				{
-					disableDurationSeconds: event.payload.channelDisableDurationSeconds,
-					disableThreshold: event.payload.channelDisableThreshold,
-				},
-				nowSeconds,
-			);
-			channelDisabled =
-				channelDisabled ||
-				disableResult.channelTempDisabled ||
-				disableResult.channelPermanentlyDisabled;
 		}
 		return {
-			channelDisabled,
+			channelDisabled: false,
 		};
 	}
 	if (event.type === "attempt_log") {

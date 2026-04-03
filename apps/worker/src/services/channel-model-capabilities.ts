@@ -31,6 +31,7 @@ export type RecordModelErrorResult = {
 type RecordChannelDisableOptions = {
 	disableDurationSeconds: number;
 	disableThreshold: number;
+	permanentDisable: boolean;
 };
 
 export type RecordChannelDisableResult = {
@@ -309,36 +310,67 @@ export async function recordChannelDisableHit(
 		Math.floor(options.disableDurationSeconds),
 	);
 	const disableThreshold = Math.max(1, Math.floor(options.disableThreshold));
+	const permanentDisable = options.permanentDisable === true;
 	const timestamp = nowIso();
-	const row = await db
+	const incrementResult = await db
 		.prepare(
-			"SELECT status, auto_disable_hit_count, auto_disabled_permanent FROM channels WHERE id = ?",
+			"UPDATE channels SET auto_disable_hit_count = COALESCE(auto_disable_hit_count, 0) + 1, auto_disabled_reason_code = ?, updated_at = ? WHERE id = ? AND status = ? AND COALESCE(auto_disabled_permanent, 0) = 0",
 		)
-		.bind(channelId)
-		.first<{
-			status: string | null;
-			auto_disable_hit_count: number | null;
-			auto_disabled_permanent: number | null;
-		}>();
-	const status = String(row?.status ?? "");
-	const currentHitCount = toSafeInt(row?.auto_disable_hit_count);
-	const alreadyPermanentlyDisabled =
-		toSafeInt(row?.auto_disabled_permanent) > 0 || status === "disabled";
-	if (alreadyPermanentlyDisabled) {
+		.bind(errorCode, timestamp, channelId, "active")
+		.run();
+	if (Number(incrementResult.meta?.changes ?? 0) === 0) {
+		const existing = await db
+			.prepare(
+				"SELECT status, auto_disable_hit_count, auto_disabled_permanent FROM channels WHERE id = ?",
+			)
+			.bind(channelId)
+			.first<{
+				status: string | null;
+				auto_disable_hit_count: number | null;
+				auto_disabled_permanent: number | null;
+			}>();
+		const existingHitCount = toSafeInt(existing?.auto_disable_hit_count);
+		const existingDisabled =
+			toSafeInt(existing?.auto_disabled_permanent) > 0 ||
+			String(existing?.status ?? "") === "disabled";
 		return {
 			channelTempDisabled: false,
-			channelPermanentlyDisabled: true,
-			hitCount: currentHitCount,
+			channelPermanentlyDisabled: existingDisabled,
+			hitCount: existingHitCount,
 		};
 	}
 
-	const nextHitCount = currentHitCount + 1;
-	if (nextHitCount >= disableThreshold) {
+	const row = await db
+		.prepare(
+			"SELECT auto_disable_hit_count, auto_disabled_permanent FROM channels WHERE id = ? AND status = ?",
+		)
+		.bind(channelId, "active")
+		.first<{
+			auto_disable_hit_count: number | null;
+			auto_disabled_permanent: number | null;
+		}>();
+	const nextHitCount = toSafeInt(row?.auto_disable_hit_count);
+	if (toSafeInt(row?.auto_disabled_permanent) > 0) {
+		return {
+			channelTempDisabled: false,
+			channelPermanentlyDisabled: true,
+			hitCount: nextHitCount,
+		};
+	}
+	if (nextHitCount < disableThreshold) {
+		return {
+			channelTempDisabled: false,
+			channelPermanentlyDisabled: false,
+			hitCount: nextHitCount,
+		};
+	}
+
+	if (permanentDisable) {
 		const disableResult = await db
 			.prepare(
-				"UPDATE channels SET status = ?, auto_disable_hit_count = ?, auto_disabled_until = NULL, auto_disabled_reason_code = ?, auto_disabled_permanent = 1, updated_at = ? WHERE id = ? AND status = ?",
+				"UPDATE channels SET auto_disabled_until = NULL, auto_disabled_reason_code = ?, auto_disabled_permanent = 1, updated_at = ? WHERE id = ? AND status = ?",
 			)
-			.bind("disabled", nextHitCount, errorCode, timestamp, channelId, "active")
+			.bind(errorCode, timestamp, channelId, "active")
 			.run();
 		return {
 			channelTempDisabled: false,
@@ -351,16 +383,9 @@ export async function recordChannelDisableHit(
 		disableDurationSeconds > 0 ? nowSeconds + disableDurationSeconds : null;
 	const tempDisableResult = await db
 		.prepare(
-			"UPDATE channels SET auto_disable_hit_count = ?, auto_disabled_until = ?, auto_disabled_reason_code = ?, auto_disabled_permanent = 0, updated_at = ? WHERE id = ? AND status = ?",
+			"UPDATE channels SET auto_disabled_until = ?, auto_disabled_reason_code = ?, auto_disabled_permanent = 0, updated_at = ? WHERE id = ? AND status = ? AND COALESCE(auto_disabled_permanent, 0) = 0",
 		)
-		.bind(
-			nextHitCount,
-			disabledUntil,
-			errorCode,
-			timestamp,
-			channelId,
-			"active",
-		)
+		.bind(disabledUntil, errorCode, timestamp, channelId, "active")
 		.run();
 	return {
 		channelTempDisabled:

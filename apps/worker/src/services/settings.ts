@@ -11,10 +11,10 @@ const DEFAULT_CHANNEL_RECOVERY_PROBE_SCHEDULE_TIME = "03:10";
 const DEFAULT_MODEL_FAILURE_COOLDOWN_MINUTES = 720;
 const DEFAULT_MODEL_FAILURE_COOLDOWN_THRESHOLD = 3;
 const DEFAULT_CHANNEL_DISABLE_ERROR_CODES = [
-	"upstream_http_401",
-	"upstream_http_403",
 	"do_request_failed",
 	"proxy_upstream_fetch_exception",
+	"model_not_found",
+	"stream_options_unsupported",
 ];
 const DEFAULT_CHANNEL_DISABLE_ERROR_THRESHOLD = 3;
 const DEFAULT_CHANNEL_DISABLE_ERROR_CODE_MINUTES = 1440;
@@ -29,6 +29,22 @@ const DEFAULT_PROXY_RETRY_SLEEP_MS = 500;
 const DEFAULT_PROXY_RETRY_SLEEP_ERROR_CODES = [
 	"system_cpu_overloaded",
 	"system_disk_overloaded",
+];
+const DEFAULT_PROXY_RETRY_RETURN_ERROR_CODES = [
+	"no_available_channels",
+	"upstream_cooldown",
+	"responses_previous_response_id_required",
+	"responses_affinity_missing",
+	"responses_affinity_channel_disabled",
+	"responses_affinity_channel_not_allowed",
+	"responses_affinity_channel_model_unavailable",
+	"responses_affinity_channel_cooldown",
+	"responses_tool_call_chain_mismatch",
+	"invalid_function_parameters",
+];
+const DEFAULT_CHANNEL_PERMANENT_DISABLE_ERROR_CODES = [
+	"upstream_http_401",
+	"upstream_http_403",
 ];
 const DEFAULT_PROXY_ZERO_COMPLETION_AS_ERROR_ENABLED = true;
 const DEFAULT_PROXY_ATTEMPT_WORKER_FALLBACK_ENABLED = true;
@@ -66,7 +82,10 @@ const PROXY_UPSTREAM_TIMEOUT_KEY = "proxy_upstream_timeout_ms";
 const PROXY_RETRY_MAX_RETRIES_KEY = "proxy_retry_max_retries";
 const PROXY_RETRY_SLEEP_MS_KEY = "proxy_retry_sleep_ms";
 const PROXY_RETRY_SLEEP_ERROR_CODES_KEY = "proxy_retry_sleep_error_codes";
+const PROXY_RETRY_RETURN_ERROR_CODES_KEY = "proxy_retry_return_error_codes";
 const CHANNEL_DISABLE_ERROR_CODES_KEY = "channel_disable_error_codes";
+const CHANNEL_PERMANENT_DISABLE_ERROR_CODES_KEY =
+	"channel_permanent_disable_error_codes";
 const CHANNEL_DISABLE_ERROR_THRESHOLD_KEY = "channel_disable_error_threshold";
 const CHANNEL_DISABLE_ERROR_CODE_MINUTES_KEY =
 	"channel_disable_error_code_minutes";
@@ -110,7 +129,9 @@ const RUNTIME_SETTING_KEYS = [
 	PROXY_RETRY_MAX_RETRIES_KEY,
 	PROXY_RETRY_SLEEP_MS_KEY,
 	PROXY_RETRY_SLEEP_ERROR_CODES_KEY,
+	PROXY_RETRY_RETURN_ERROR_CODES_KEY,
 	CHANNEL_DISABLE_ERROR_CODES_KEY,
+	CHANNEL_PERMANENT_DISABLE_ERROR_CODES_KEY,
 	CHANNEL_DISABLE_ERROR_THRESHOLD_KEY,
 	CHANNEL_DISABLE_ERROR_CODE_MINUTES_KEY,
 	PROXY_ZERO_COMPLETION_AS_ERROR_KEY,
@@ -153,7 +174,9 @@ export type RuntimeProxyConfig = {
 	retry_max_retries: number;
 	retry_sleep_ms: number;
 	retry_sleep_error_codes: string[];
+	retry_return_error_codes: string[];
 	channel_disable_error_codes: string[];
+	channel_permanent_disable_error_codes: string[];
 	channel_disable_error_threshold: number;
 	channel_disable_error_code_minutes: number;
 	zero_completion_as_error_enabled: boolean;
@@ -182,7 +205,9 @@ export type ProxyRuntimeSettings = {
 	retry_max_retries: number;
 	retry_sleep_ms: number;
 	retry_sleep_error_codes: string[];
+	retry_return_error_codes: string[];
 	channel_disable_error_codes: string[];
+	channel_permanent_disable_error_codes: string[];
 	channel_disable_error_threshold: number;
 	channel_disable_error_code_minutes: number;
 	zero_completion_as_error_enabled: boolean;
@@ -451,9 +476,17 @@ export async function getProxyRuntimeSettings(
 			settings[PROXY_RETRY_SLEEP_ERROR_CODES_KEY] ?? null,
 			DEFAULT_PROXY_RETRY_SLEEP_ERROR_CODES,
 		),
+		retry_return_error_codes: parseErrorCodeListSetting(
+			settings[PROXY_RETRY_RETURN_ERROR_CODES_KEY] ?? null,
+			DEFAULT_PROXY_RETRY_RETURN_ERROR_CODES,
+		),
 		channel_disable_error_codes: parseErrorCodeListSetting(
 			settings[CHANNEL_DISABLE_ERROR_CODES_KEY] ?? null,
 			DEFAULT_CHANNEL_DISABLE_ERROR_CODES,
+		),
+		channel_permanent_disable_error_codes: parseErrorCodeListSetting(
+			settings[CHANNEL_PERMANENT_DISABLE_ERROR_CODES_KEY] ?? null,
+			DEFAULT_CHANNEL_PERMANENT_DISABLE_ERROR_CODES,
 		),
 		channel_disable_error_threshold: parsePositiveSetting(
 			settings[CHANNEL_DISABLE_ERROR_THRESHOLD_KEY] ?? null,
@@ -614,12 +647,30 @@ export async function setProxyRuntimeSettings(
 			),
 		);
 	}
+	if (update.retry_return_error_codes !== undefined) {
+		tasks.push(
+			upsertSetting(
+				db,
+				PROXY_RETRY_RETURN_ERROR_CODES_KEY,
+				stringifyErrorCodeList(update.retry_return_error_codes),
+			),
+		);
+	}
 	if (update.channel_disable_error_codes !== undefined) {
 		tasks.push(
 			upsertSetting(
 				db,
 				CHANNEL_DISABLE_ERROR_CODES_KEY,
 				stringifyErrorCodeList(update.channel_disable_error_codes),
+			),
+		);
+	}
+	if (update.channel_permanent_disable_error_codes !== undefined) {
+		tasks.push(
+			upsertSetting(
+				db,
+				CHANNEL_PERMANENT_DISABLE_ERROR_CODES_KEY,
+				stringifyErrorCodeList(update.channel_permanent_disable_error_codes),
 			),
 		);
 	}
