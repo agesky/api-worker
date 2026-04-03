@@ -173,6 +173,9 @@ const toTomlLiteralPath = (filePath) =>
 	`'${path.resolve(filePath).replace(/'/g, "''")}'`;
 
 const rewriteConfigPathsForExternalOutput = (sourceText, sourceDir) => {
+	const migrationsDir = toTomlLiteralPath(
+		path.resolve(sourceDir, "migrations"),
+	);
 	const rewriteMaybeRelative = (rawPath) => {
 		if (path.isAbsolute(rawPath)) {
 			return toTomlLiteralPath(rawPath);
@@ -190,6 +193,10 @@ const rewriteConfigPathsForExternalOutput = (sourceText, sourceDir) => {
 			/(\[assets\][\s\S]*?\bdirectory\s*=\s*)(["'])([^"']+)\2/u,
 			(_, prefix, _quote, rawPath) =>
 				`${prefix}${rewriteMaybeRelative(rawPath)}`,
+		)
+		.replace(
+			/(\[\[d1_databases\]\][\s\S]*?\bdatabase_id\s*=\s*["'][^"']*["']\s*)(?!\bmigrations_dir\s*=)/u,
+			`$1migrations_dir = ${migrationsDir}\n`,
 		);
 };
 

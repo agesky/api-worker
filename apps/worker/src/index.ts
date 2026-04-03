@@ -87,7 +87,8 @@ app.route("/api/group", newapiGroupRoutes);
 app.route("/v1", proxyRoutes);
 app.route("/v1beta", proxyRoutes);
 
-app.onError((_, c) => {
+app.onError((error, c) => {
+	console.error("[worker:error]", c.req.method, c.req.path, error);
 	if (
 		c.req.path === "/api" ||
 		c.req.path.startsWith("/api/") ||

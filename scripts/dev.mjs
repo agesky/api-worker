@@ -519,6 +519,9 @@ const toTomlLiteralPath = (filePath) =>
 	`'${path.resolve(filePath).replace(/'/g, "''")}'`;
 
 const rewriteConfigPathsForExternalOutput = (sourceText, sourceDir) => {
+	const migrationsDir = toTomlLiteralPath(
+		path.resolve(sourceDir, "migrations"),
+	);
 	const rewriteMaybeRelative = (rawPath) => {
 		if (path.isAbsolute(rawPath)) {
 			return toTomlLiteralPath(rawPath);
@@ -536,6 +539,10 @@ const rewriteConfigPathsForExternalOutput = (sourceText, sourceDir) => {
 			/(\[assets\][\s\S]*?\bdirectory\s*=\s*)(["'])([^"']+)\2/u,
 			(_, prefix, _quote, rawPath) =>
 				`${prefix}${rewriteMaybeRelative(rawPath)}`,
+		)
+		.replace(
+			/(\[\[d1_databases\]\][\s\S]*?\bdatabase_id\s*=\s*["'][^"']*["']\s*)(?!\bmigrations_dir\s*=)/u,
+			`$1migrations_dir = ${migrationsDir}\n`,
 		);
 };
 
@@ -589,7 +596,28 @@ const ensureWorkerConfigForRun = () => {
 	return outputPath;
 };
 
-const buildCommands = () => {
+const applyLocalWorkerMigrations = async (workerConfigPath) => {
+	if (useRemoteD1) {
+		return;
+	}
+	await runOnce(
+		BUN_CMD,
+		[
+			"x",
+			"wrangler",
+			"d1",
+			"migrations",
+			"apply",
+			"DB",
+			"--local",
+			"--config",
+			workerConfigPath,
+		],
+		"worker local migrations",
+	);
+};
+
+const buildCommands = (workerConfigPath) => {
 	const commands = [];
 	if (!skipAttemptWorker) {
 		const attemptWranglerArgs = ["dev", "--port", String(attemptWorkerPort)];
@@ -632,7 +660,7 @@ const buildCommands = () => {
 		});
 	}
 	const workerWranglerArgs = ["dev", "--port", String(workerPort)];
-	workerWranglerArgs.push("--config", ensureWorkerConfigForRun());
+	workerWranglerArgs.push("--config", workerConfigPath);
 	if (useRemoteWorker) {
 		workerWranglerArgs.push("--remote");
 	}
@@ -834,7 +862,9 @@ const main = async () => {
 
 	await prepareUiBuild();
 	await prepareConfigs();
-	const commands = buildCommands();
+	const workerConfigPath = ensureWorkerConfigForRun();
+	await applyLocalWorkerMigrations(workerConfigPath);
+	const commands = buildCommands(workerConfigPath);
 	startLongRunningCommands(commands);
 };
 
