@@ -31,6 +31,9 @@ const ATTEMPT_STREAM_FIRST_TOKEN_LATENCY_HEADER =
 	"x-ha-attempt-stream-first-token-latency-ms";
 const ATTEMPT_STREAM_META_PARTIAL_HEADER = "x-ha-attempt-stream-meta-partial";
 const ATTEMPT_STREAM_META_REASON_HEADER = "x-ha-attempt-stream-meta-reason";
+const ATTEMPT_STREAM_EVENTS_SEEN_HEADER = "x-ha-attempt-stream-events-seen";
+const ATTEMPT_STREAM_ERROR_CODE_HEADER = "x-ha-attempt-stream-error-code";
+const ATTEMPT_STREAM_ERROR_MESSAGE_HEADER = "x-ha-attempt-stream-error-message";
 const ATTEMPT_RESPONSE_ID_HEADER = "x-ha-attempt-response-id";
 const DISPATCH_ATTEMPT_INDEX_HEADER = "x-ha-dispatch-attempt-index";
 const DISPATCH_CHANNEL_ID_HEADER = "x-ha-dispatch-channel-id";
@@ -498,6 +501,7 @@ async function collectAttemptStreamMeta(
 	let firstTokenLatencyMs: number | null = null;
 	let streamMetaPartial = false;
 	let streamMetaReason: string | null = null;
+	let eventsSeen = 0;
 
 	if (!usage && shouldParseSuccessStreamUsage(mode)) {
 		const parsedStreamUsage = await parseUsageFromSse(response.clone(), {
@@ -508,6 +512,13 @@ async function collectAttemptStreamMeta(
 		if (parsedStreamUsage) {
 			usage = parsedStreamUsage.usage;
 			firstTokenLatencyMs = parsedStreamUsage.firstTokenLatencyMs;
+			eventsSeen = parsedStreamUsage.eventsSeen ?? 0;
+			if (parsedStreamUsage.abnormal) {
+				meta[ATTEMPT_STREAM_ERROR_CODE_HEADER] =
+					parsedStreamUsage.abnormal.errorCode;
+				meta[ATTEMPT_STREAM_ERROR_MESSAGE_HEADER] =
+					parsedStreamUsage.abnormal.errorMessage;
+			}
 			streamMetaPartial = shouldMarkStreamMetaPartial({
 				mode,
 				hasImmediateUsage: false,
@@ -533,6 +544,9 @@ async function collectAttemptStreamMeta(
 		}
 	}
 
+	if (eventsSeen > 0) {
+		meta[ATTEMPT_STREAM_EVENTS_SEEN_HEADER] = String(eventsSeen);
+	}
 	if (usage) {
 		meta["x-usage-total-tokens"] = String(usage.totalTokens);
 		meta["x-usage-prompt-tokens"] = String(usage.promptTokens);

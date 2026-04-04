@@ -88,6 +88,8 @@ import {
 	parseUsageFromHeaders,
 	parseUsageFromJson,
 	parseUsageFromSse,
+	type StreamAbnormalSuccess,
+	type StreamUsage,
 	type StreamUsageMode,
 	type StreamUsageOptions,
 	StreamUsageParseError,
@@ -180,6 +182,9 @@ const ATTEMPT_STREAM_FIRST_TOKEN_LATENCY_HEADER =
 	"x-ha-attempt-stream-first-token-latency-ms";
 const ATTEMPT_STREAM_META_PARTIAL_HEADER = "x-ha-attempt-stream-meta-partial";
 const ATTEMPT_STREAM_META_REASON_HEADER = "x-ha-attempt-stream-meta-reason";
+const ATTEMPT_STREAM_EVENTS_SEEN_HEADER = "x-ha-attempt-stream-events-seen";
+const ATTEMPT_STREAM_ERROR_CODE_HEADER = "x-ha-attempt-stream-error-code";
+const ATTEMPT_STREAM_ERROR_MESSAGE_HEADER = "x-ha-attempt-stream-error-message";
 const ATTEMPT_RESPONSE_ID_HEADER = "x-ha-attempt-response-id";
 const ATTEMPT_DISPATCH_INDEX_HEADER = "x-ha-dispatch-attempt-index";
 const ATTEMPT_DISPATCH_CHANNEL_ID_HEADER = "x-ha-dispatch-channel-id";
@@ -2216,6 +2221,17 @@ function parseOptionalLatencyHeader(value: string | null): number | null {
 	return Math.floor(parsed);
 }
 
+function parseOptionalCountHeader(value: string | null): number | null {
+	if (!value) {
+		return null;
+	}
+	const parsed = Number(value);
+	if (!Number.isInteger(parsed) || parsed < 0) {
+		return null;
+	}
+	return parsed;
+}
+
 function parseAttemptIndexHeader(value: string | null): number | null {
 	if (!value) {
 		return null;
@@ -2233,6 +2249,25 @@ function parseBooleanHeader(value: string | null): boolean {
 	}
 	const normalized = value.trim().toLowerCase();
 	return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+function readAttemptStreamAbnormal(
+	headers: Headers,
+): StreamAbnormalSuccess | null {
+	const errorCode = normalizeMessage(
+		headers.get(ATTEMPT_STREAM_ERROR_CODE_HEADER),
+	);
+	if (!errorCode) {
+		return null;
+	}
+	return {
+		errorCode,
+		errorMessage:
+			normalizeMessage(headers.get(ATTEMPT_STREAM_ERROR_MESSAGE_HEADER)) ??
+			errorCode,
+		errorMetaJson: null,
+		eventType: null,
+	};
 }
 
 function parseErrorActionHeader(value: string | null): ProxyErrorAction {
@@ -3371,6 +3406,7 @@ proxy.all("/*", tokenAuth, async (c) => {
 	let selectedUpstreamModel: string | null = null;
 	let selectedRequestPath = targetPath;
 	let selectedImmediateUsage: NormalizedUsage | null = null;
+	let selectedParsedStreamUsage: StreamUsage | null = null;
 	let selectedHasUsageHeaders = false;
 	let selectedAttemptIndex: number | null = null;
 	let selectedAttemptStartedAt: string | null = null;
@@ -3889,15 +3925,61 @@ proxy.all("/*", tokenAuth, async (c) => {
 							hasUsageJsonSignal = hasUsageJsonHint(data);
 							jsonUsage = parseUsageFromJson(data);
 						}
-						const immediateUsage = jsonUsage ?? headerUsage;
+						let immediateUsage = jsonUsage ?? headerUsage;
 						const immediateUsageSource = jsonUsage
 							? "json"
 							: headerUsage
 								? "header"
 								: "none";
+						const streamUsageProcessed = isStream
+							? parseBooleanHeader(
+									response.headers.get(ATTEMPT_STREAM_USAGE_PROCESSED_HEADER),
+								)
+							: false;
+						let parsedSuccessStreamUsage: StreamUsage | null = null;
+						if (isStream) {
+							if (streamUsageProcessed) {
+								parsedSuccessStreamUsage = {
+									usage: headerUsage,
+									firstTokenLatencyMs: parseOptionalLatencyHeader(
+										response.headers.get(
+											ATTEMPT_STREAM_FIRST_TOKEN_LATENCY_HEADER,
+										),
+									),
+									eventsSeen:
+										parseOptionalCountHeader(
+											response.headers.get(ATTEMPT_STREAM_EVENTS_SEEN_HEADER),
+										) ?? 0,
+									abnormal: readAttemptStreamAbnormal(response.headers),
+								};
+								if (parsedSuccessStreamUsage?.usage) {
+									immediateUsage = parsedSuccessStreamUsage.usage;
+								}
+							} else if (
+								shouldParseSuccessStreamUsage(
+									streamUsageMode as "full" | "lite" | "off",
+								)
+							) {
+								parsedSuccessStreamUsage = await parseUsageFromSse(
+									response.clone(),
+									{
+										...streamUsageOptions,
+										timeoutMs: streamUsageParseTimeoutMs,
+									},
+								).catch(() => null);
+								if (parsedSuccessStreamUsage?.usage) {
+									immediateUsage = parsedSuccessStreamUsage.usage;
+								}
+							}
+						}
 						const abnormalResponse =
+							parsedSuccessStreamUsage?.abnormal ??
 							(await detectAbnormalSuccessResponse(response)) ??
-							(isStream
+							(isStream &&
+							!parsedSuccessStreamUsage &&
+							shouldParseSuccessStreamUsage(
+								streamUsageMode as "full" | "lite" | "off",
+							)
 								? await detectAbnormalStreamSuccessResponse(response)
 								: null);
 						if (abnormalResponse) {
@@ -4162,6 +4244,7 @@ proxy.all("/*", tokenAuth, async (c) => {
 								selectedResponse = response;
 								selectedRequestPath = responsePath;
 								selectedImmediateUsage = immediateUsage;
+								selectedParsedStreamUsage = parsedSuccessStreamUsage;
 								selectedHasUsageHeaders = hasUsageHeaderSignal;
 								selectedAttemptIndex = attemptNumber;
 								selectedAttemptStartedAt = meta.attemptStartedAt;
@@ -4759,15 +4842,61 @@ proxy.all("/*", tokenAuth, async (c) => {
 						hasUsageJsonSignal = hasUsageJsonHint(data);
 						jsonUsage = parseUsageFromJson(data);
 					}
-					const immediateUsage = jsonUsage ?? headerUsage;
+					let immediateUsage = jsonUsage ?? headerUsage;
 					const immediateUsageSource = jsonUsage
 						? "json"
 						: headerUsage
 							? "header"
 							: "none";
+					const streamUsageProcessed = isStream
+						? parseBooleanHeader(
+								response.headers.get(ATTEMPT_STREAM_USAGE_PROCESSED_HEADER),
+							)
+						: false;
+					let parsedSuccessStreamUsage: StreamUsage | null = null;
+					if (isStream) {
+						if (streamUsageProcessed) {
+							parsedSuccessStreamUsage = {
+								usage: headerUsage,
+								firstTokenLatencyMs: parseOptionalLatencyHeader(
+									response.headers.get(
+										ATTEMPT_STREAM_FIRST_TOKEN_LATENCY_HEADER,
+									),
+								),
+								eventsSeen:
+									parseOptionalCountHeader(
+										response.headers.get(ATTEMPT_STREAM_EVENTS_SEEN_HEADER),
+									) ?? 0,
+								abnormal: readAttemptStreamAbnormal(response.headers),
+							};
+							if (parsedSuccessStreamUsage?.usage) {
+								immediateUsage = parsedSuccessStreamUsage.usage;
+							}
+						} else if (
+							shouldParseSuccessStreamUsage(
+								streamUsageMode as "full" | "lite" | "off",
+							)
+						) {
+							parsedSuccessStreamUsage = await parseUsageFromSse(
+								response.clone(),
+								{
+									...streamUsageOptions,
+									timeoutMs: streamUsageParseTimeoutMs,
+								},
+							).catch(() => null);
+							if (parsedSuccessStreamUsage?.usage) {
+								immediateUsage = parsedSuccessStreamUsage.usage;
+							}
+						}
+					}
 					const abnormalResponse =
+						parsedSuccessStreamUsage?.abnormal ??
 						(await detectAbnormalSuccessResponse(response)) ??
-						(isStream
+						(isStream &&
+						!parsedSuccessStreamUsage &&
+						shouldParseSuccessStreamUsage(
+							streamUsageMode as "full" | "lite" | "off",
+						)
 							? await detectAbnormalStreamSuccessResponse(response)
 							: null);
 					if (abnormalResponse) {
@@ -5038,6 +5167,7 @@ proxy.all("/*", tokenAuth, async (c) => {
 					selectedResponse = response;
 					selectedRequestPath = responsePath;
 					selectedImmediateUsage = immediateUsage;
+					selectedParsedStreamUsage = parsedSuccessStreamUsage;
 					selectedHasUsageHeaders = hasUsageHeaderSignal;
 					selectedAttemptIndex = attemptNumber;
 					selectedAttemptStartedAt = attemptStartedAt;
@@ -5328,6 +5458,7 @@ proxy.all("/*", tokenAuth, async (c) => {
 		let streamMetaPartial = false;
 		let streamMetaReason: string | null = null;
 		let firstTokenLatencyMs: number | null = null;
+		let eventsSeen = 0;
 		if (streamUsageProcessed) {
 			streamMetaPartial = parseBooleanHeader(
 				selectedResponse.headers.get(ATTEMPT_STREAM_META_PARTIAL_HEADER),
@@ -5339,6 +5470,30 @@ proxy.all("/*", tokenAuth, async (c) => {
 			firstTokenLatencyMs = parseOptionalLatencyHeader(
 				selectedResponse.headers.get(ATTEMPT_STREAM_FIRST_TOKEN_LATENCY_HEADER),
 			);
+			eventsSeen =
+				parseOptionalCountHeader(
+					selectedResponse.headers.get(ATTEMPT_STREAM_EVENTS_SEEN_HEADER),
+				) ?? 0;
+		} else if (selectedParsedStreamUsage) {
+			if (selectedParsedStreamUsage.usage) {
+				usage = selectedParsedStreamUsage.usage;
+				usageSource = "stream";
+			}
+			firstTokenLatencyMs = selectedParsedStreamUsage.firstTokenLatencyMs;
+			eventsSeen = selectedParsedStreamUsage.eventsSeen ?? 0;
+			streamMetaPartial = shouldMarkStreamMetaPartial({
+				mode: streamUsageMode as "full" | "lite" | "off",
+				hasImmediateUsage: Boolean(selectedImmediateUsage),
+				hasParsedUsage: Boolean(selectedParsedStreamUsage.usage),
+				eventsSeen,
+			});
+			if (streamMetaPartial) {
+				streamMetaReason = resolveStreamMetaPartialReason({
+					mode: streamUsageMode as "full" | "lite" | "off",
+					timedOut: selectedParsedStreamUsage.timedOut,
+					eventsSeen,
+				});
+			}
 		} else if (
 			shouldParseSuccessStreamUsage(streamUsageMode as "full" | "lite" | "off")
 		) {
@@ -5352,17 +5507,18 @@ proxy.all("/*", tokenAuth, async (c) => {
 					usageSource = "stream";
 				}
 				firstTokenLatencyMs = streamUsage.firstTokenLatencyMs;
+				eventsSeen = streamUsage.eventsSeen ?? 0;
 				streamMetaPartial = shouldMarkStreamMetaPartial({
 					mode: streamUsageMode as "full" | "lite" | "off",
 					hasImmediateUsage: Boolean(selectedImmediateUsage),
 					hasParsedUsage: Boolean(streamUsage.usage),
-					eventsSeen: streamUsage.eventsSeen,
+					eventsSeen,
 				});
 				if (streamMetaPartial) {
 					streamMetaReason = resolveStreamMetaPartialReason({
 						mode: streamUsageMode as "full" | "lite" | "off",
 						timedOut: streamUsage.timedOut,
-						eventsSeen: streamUsage.eventsSeen,
+						eventsSeen,
 					});
 				}
 			} catch {
@@ -5391,7 +5547,7 @@ proxy.all("/*", tokenAuth, async (c) => {
 			markStreamMetaPartial({
 				reason,
 				path: selectedRequestPath,
-				eventsSeen: 0,
+				eventsSeen,
 				hasImmediateUsage: Boolean(selectedImmediateUsage),
 				hasUsageHeaders: selectedHasUsageHeaders,
 			});

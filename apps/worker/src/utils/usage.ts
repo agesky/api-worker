@@ -19,6 +19,7 @@ export type StreamUsage = {
 	eventsSeen?: number;
 	sampledPayload?: string | null;
 	sampleTruncated?: boolean;
+	abnormal?: StreamAbnormalSuccess | null;
 };
 
 export type StreamUsageMode = "full" | "lite" | "off";
@@ -26,6 +27,13 @@ export type StreamUsageMode = "full" | "lite" | "off";
 export type StreamUsageOptions = {
 	mode?: StreamUsageMode;
 	timeoutMs?: number;
+};
+
+export type StreamAbnormalSuccess = {
+	errorCode: string;
+	errorMessage: string;
+	errorMetaJson: string | null;
+	eventType: string | null;
 };
 
 export type StreamUsageParseErrorCode =
@@ -62,6 +70,9 @@ export class StreamUsageParseError extends Error {
 	}
 }
 
+const UPSTREAM_STREAM_ERROR_PAYLOAD_CODE = "upstream_stream_error_payload";
+const STREAM_ERROR_DETAIL_MAX_LENGTH = 160;
+
 function normalizeErrorDetail(error: unknown): string | null {
 	if (error instanceof Error) {
 		const text = error.message.trim();
@@ -84,6 +95,90 @@ function isAbortLikeError(error: unknown): boolean {
 		message.includes("abort") ||
 		message.includes("cancel")
 	);
+}
+
+function normalizeMessage(value: string | null | undefined): string | null {
+	if (!value) {
+		return null;
+	}
+	const trimmed = value.trim();
+	return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeSummaryDetail(value: string, maxLength: number): string {
+	const normalized = value.replace(/\s+/g, " ").trim();
+	if (normalized.length <= maxLength) {
+		return normalized;
+	}
+	return `${normalized.slice(0, maxLength - 1)}...`;
+}
+
+function stringifyErrorMeta(meta: Record<string, unknown>): string | null {
+	try {
+		return JSON.stringify(meta);
+	} catch {
+		return null;
+	}
+}
+
+function extractStreamPayloadError(
+	payload: Record<string, unknown>,
+	eventType: string | null,
+	context: {
+		eventsSeen: number;
+		bytesRead: number;
+	},
+): StreamAbnormalSuccess | null {
+	const payloadType =
+		typeof payload.type === "string" ? payload.type.trim() : null;
+	const normalizedPayloadType = payloadType?.toLowerCase() ?? "";
+	const normalizedEventType = eventType?.trim().toLowerCase() ?? "";
+	const nestedError =
+		payload.error && typeof payload.error === "object"
+			? (payload.error as Record<string, unknown>)
+			: null;
+	const shouldTreatAsError =
+		Boolean(nestedError) ||
+		normalizedEventType === "error" ||
+		normalizedPayloadType === "error" ||
+		normalizedPayloadType === "response.failed";
+	if (!shouldTreatAsError) {
+		return null;
+	}
+	const upstreamCode =
+		typeof nestedError?.code === "string"
+			? nestedError.code
+			: typeof nestedError?.type === "string"
+				? nestedError.type
+				: typeof payload.code === "string"
+					? payload.code
+					: null;
+	const upstreamMessage =
+		typeof nestedError?.message === "string"
+			? nestedError.message
+			: typeof payload.message === "string"
+				? payload.message
+				: null;
+	const summary = normalizeSummaryDetail(
+		normalizeMessage(upstreamMessage) ?? "-",
+		STREAM_ERROR_DETAIL_MAX_LENGTH,
+	);
+	const resolvedEventType = eventType ?? payloadType ?? null;
+	return {
+		errorCode: UPSTREAM_STREAM_ERROR_PAYLOAD_CODE,
+		errorMessage: `${UPSTREAM_STREAM_ERROR_PAYLOAD_CODE}: status=200, event_type=${
+			resolvedEventType ?? "-"
+		}, code=${upstreamCode ?? "-"}, message=${summary}`,
+		errorMetaJson: stringifyErrorMeta({
+			type: "stream_error_payload",
+			event_type: resolvedEventType,
+			upstream_code: upstreamCode,
+			upstream_message: normalizeMessage(upstreamMessage),
+			events_seen: context.eventsSeen,
+			bytes_read: context.bytesRead,
+		}),
+		eventType: resolvedEventType,
+	};
 }
 
 function toNumber(value: unknown): number | null {
@@ -157,11 +252,21 @@ export async function parseUsageFromSse(
 	options: StreamUsageOptions = {},
 ): Promise<StreamUsage> {
 	if (!response.body) {
-		return { usage: null, firstTokenLatencyMs: null, timedOut: false };
+		return {
+			usage: null,
+			firstTokenLatencyMs: null,
+			timedOut: false,
+			abnormal: null,
+		};
 	}
 	const mode: StreamUsageMode = options.mode ?? "full";
 	if (mode === "off") {
-		return { usage: null, firstTokenLatencyMs: null, timedOut: false };
+		return {
+			usage: null,
+			firstTokenLatencyMs: null,
+			timedOut: false,
+			abnormal: null,
+		};
 	}
 	const reader = response.body.getReader();
 	const timeoutMs =
@@ -179,10 +284,12 @@ export async function parseUsageFromSse(
 	const decoder = new TextDecoder();
 	let buffer = "";
 	let usage: NormalizedUsage | null = null;
+	let abnormal: StreamAbnormalSuccess | null = null;
 	const start = Date.now();
 	let firstTokenLatencyMs: number | null = null;
 	let bytesRead = 0;
 	let eventsSeen = 0;
+	let currentEventType: string | null = null;
 	const sampleLimit = 2048;
 	let sampledPayload = "";
 	let sampleTruncated = false;
@@ -236,8 +343,20 @@ export async function parseUsageFromSse(
 		buffer += decoder.decode(value, { stream: true });
 		let newlineIndex = buffer.indexOf("\n");
 		while (newlineIndex !== -1) {
-			const line = buffer.slice(0, newlineIndex).trim();
+			const rawLine = buffer.slice(0, newlineIndex);
 			buffer = buffer.slice(newlineIndex + 1);
+			const line = rawLine.trim();
+			if (!line) {
+				currentEventType = null;
+				newlineIndex = buffer.indexOf("\n");
+				continue;
+			}
+			if (line.startsWith("event:")) {
+				const nextEventType = line.slice(6).trim();
+				currentEventType = nextEventType || null;
+				newlineIndex = buffer.indexOf("\n");
+				continue;
+			}
 			if (line.startsWith("data:")) {
 				const payload = line.slice(5).trim();
 				if (payload && payload !== "[DONE]") {
@@ -245,6 +364,39 @@ export async function parseUsageFromSse(
 					appendSample(payload);
 					if (firstTokenLatencyMs === null) {
 						firstTokenLatencyMs = Date.now() - start;
+					}
+					const parsedPayload = safeJsonParse<Record<string, unknown> | null>(
+						payload,
+						null,
+					);
+					if (
+						parsedPayload &&
+						typeof parsedPayload === "object" &&
+						!Array.isArray(parsedPayload)
+					) {
+						abnormal = extractStreamPayloadError(
+							parsedPayload,
+							currentEventType,
+							{
+								eventsSeen,
+								bytesRead,
+							},
+						);
+						if (abnormal) {
+							if (timeoutId) {
+								clearTimeout(timeoutId);
+							}
+							return {
+								usage,
+								firstTokenLatencyMs,
+								timedOut,
+								bytesRead,
+								eventsSeen,
+								sampledPayload: sampledPayload || null,
+								sampleTruncated,
+								abnormal,
+							};
+						}
 					}
 					let wasmCandidate: NormalizedUsage | null = null;
 					try {
@@ -281,6 +433,35 @@ export async function parseUsageFromSse(
 			if (firstTokenLatencyMs === null) {
 				firstTokenLatencyMs = Date.now() - start;
 			}
+			const parsedPayload = safeJsonParse<Record<string, unknown> | null>(
+				payload,
+				null,
+			);
+			if (
+				parsedPayload &&
+				typeof parsedPayload === "object" &&
+				!Array.isArray(parsedPayload)
+			) {
+				abnormal = extractStreamPayloadError(parsedPayload, currentEventType, {
+					eventsSeen,
+					bytesRead,
+				});
+				if (abnormal) {
+					if (timeoutId) {
+						clearTimeout(timeoutId);
+					}
+					return {
+						usage,
+						firstTokenLatencyMs,
+						timedOut,
+						bytesRead,
+						eventsSeen,
+						sampledPayload: sampledPayload || null,
+						sampleTruncated,
+						abnormal,
+					};
+				}
+			}
 			let wasmCandidate: NormalizedUsage | null = null;
 			try {
 				wasmCandidate = parseUsageFromSseLineViaWasm(remaining);
@@ -309,6 +490,7 @@ export async function parseUsageFromSse(
 					eventsSeen,
 					sampledPayload: sampledPayload || null,
 					sampleTruncated,
+					abnormal,
 				};
 			}
 		}
@@ -325,5 +507,6 @@ export async function parseUsageFromSse(
 		eventsSeen,
 		sampledPayload: sampledPayload || null,
 		sampleTruncated,
+		abnormal,
 	};
 }
