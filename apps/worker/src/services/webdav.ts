@@ -13,6 +13,7 @@ type WebdavRequestOptions = {
 	method: string;
 	body?: string;
 	headers?: Record<string, string>;
+	trailingSlash?: boolean;
 };
 
 const trimSlashes = (value: string) => value.replace(/^\/+|\/+$/g, "");
@@ -43,12 +44,19 @@ const splitSegments = (value: string): string[] =>
 		.map((item) => item.trim())
 		.filter((item) => item.length > 0);
 
-const buildUrl = (baseUrl: string, segments: string[]): string => {
-	let current = new URL(normalizeBaseUrl(baseUrl));
-	for (const segment of segments) {
-		current = new URL(`${current.toString()}${encodeURIComponent(segment)}/`);
+const buildUrl = (
+	baseUrl: string,
+	segments: string[],
+	trailingSlash = true,
+): string => {
+	const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
+	const encodedPath = segments
+		.map((segment) => encodeURIComponent(segment))
+		.join("/");
+	if (!encodedPath) {
+		return normalizedBaseUrl;
 	}
-	return current.toString();
+	return `${normalizedBaseUrl}${encodedPath}${trailingSlash ? "/" : ""}`;
 };
 
 const requestWebdav = async (
@@ -58,10 +66,11 @@ const requestWebdav = async (
 ): Promise<Response> => {
 	const headers = new Headers(options.headers ?? {});
 	headers.set("Authorization", authHeader(config.credentials));
-	const url = buildUrl(config.baseUrl, [
-		...splitSegments(config.path),
-		...segments,
-	]);
+	const url = buildUrl(
+		config.baseUrl,
+		[...splitSegments(config.path), ...segments],
+		options.trailingSlash ?? true,
+	);
 	return fetch(url, {
 		method: options.method,
 		headers,
@@ -132,6 +141,7 @@ export async function readWebdavJson<T>(
 		headers: {
 			Accept: "application/json",
 		},
+		trailingSlash: false,
 	});
 	if (response.status === 404) {
 		return null;
@@ -158,6 +168,7 @@ export async function writeWebdavJson(
 			headers: {
 				"Content-Type": "application/json",
 			},
+			trailingSlash: false,
 		},
 	);
 	if (!response.ok) {
@@ -174,6 +185,7 @@ export async function deleteWebdavFile(
 		splitSegments(relativeFilePath),
 		{
 			method: "DELETE",
+			trailingSlash: false,
 		},
 	);
 	if (response.status === 404) {
