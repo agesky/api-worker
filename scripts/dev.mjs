@@ -568,6 +568,20 @@ const stripNamedBlock = (sourceText, header) => {
 const toTomlLiteralPath = (filePath) =>
 	`'${path.resolve(filePath).replace(/'/g, "''")}'`;
 
+const ensureD1MigrationsDir = (sourceText, migrationsDir) =>
+	sourceText.replace(
+		/(\[\[d1_databases\]\][\s\S]*?)(?=\r?\n\[[^\n]+\]|\r?\n\[\[[^\n]+\]\]|$)/gu,
+		(block) => {
+			if (/\bmigrations_dir\s*=/u.test(block)) {
+				return block;
+			}
+			return block.replace(
+				/(\bdatabase_id\s*=\s*["'][^"']*["']\s*)/u,
+				`$1migrations_dir = ${migrationsDir}\n`,
+			);
+		},
+	);
+
 const rewriteConfigPathsForExternalOutput = (sourceText, sourceDir) => {
 	const migrationsDir = toTomlLiteralPath(
 		path.resolve(sourceDir, "migrations"),
@@ -579,7 +593,7 @@ const rewriteConfigPathsForExternalOutput = (sourceText, sourceDir) => {
 		return toTomlLiteralPath(path.resolve(sourceDir, rawPath));
 	};
 
-	return sourceText
+	const rewrittenText = sourceText
 		.replace(
 			/(\bmain\s*=\s*)(["'])([^"']+)\2/u,
 			(_, prefix, _quote, rawPath) =>
@@ -589,11 +603,9 @@ const rewriteConfigPathsForExternalOutput = (sourceText, sourceDir) => {
 			/(\[assets\][\s\S]*?\bdirectory\s*=\s*)(["'])([^"']+)\2/u,
 			(_, prefix, _quote, rawPath) =>
 				`${prefix}${rewriteMaybeRelative(rawPath)}`,
-		)
-		.replace(
-			/(\[\[d1_databases\]\][\s\S]*?\bdatabase_id\s*=\s*["'][^"']*["']\s*)(?!\bmigrations_dir\s*=)/u,
-			`$1migrations_dir = ${migrationsDir}\n`,
 		);
+
+	return ensureD1MigrationsDir(rewrittenText, migrationsDir);
 };
 
 const resolveGeneratedConfigPath = (target, filename) =>
