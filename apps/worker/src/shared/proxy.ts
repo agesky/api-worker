@@ -22,12 +22,8 @@ import {
 	tokenAuth,
 } from "../../../worker/src/middleware/tokenAuth";
 import type { CallTokenItem } from "../../../worker/src/services/call-token-selector";
+import { resolveChannelAttemptTarget } from "../../../worker/src/services/channel-attemptability";
 import { listCallTokens } from "../../../worker/src/services/channel-call-token-repo";
-import {
-	type ChannelMetadata,
-	parseChannelMetadata,
-	resolveProvider,
-} from "../../../worker/src/services/channel-metadata";
 import {
 	listCoolingDownChannelsForModel,
 	listVerifiedModelsByChannel,
@@ -37,10 +33,7 @@ import {
 	type ChannelRecord,
 	createWeightedOrder,
 } from "../../../worker/src/services/channels";
-import {
-	resolveUpstreamModelForChannel,
-	selectCandidateChannels,
-} from "../../../worker/src/services/channel-routing";
+import { selectCandidateChannels } from "../../../worker/src/services/channel-routing";
 import { adaptChatResponse } from "../../../worker/src/services/chat-response-adapter";
 import {
 	buildActiveChannelsKey,
@@ -209,6 +202,7 @@ const WEIGHTED_ORDER_FAILED_CODE = "weighted_order_failed";
 const RESPONSE_ADAPT_FAILED_CODE = "response_adapt_failed";
 const STREAM_META_PARTIAL_CODE = "stream_meta_partial";
 const STREAM_META_PARTIAL_BIZ_STATUS = "29011";
+const NO_ROUTABLE_CHANNELS_ERROR_CODE = "no_routable_channels";
 
 let activeStreamUsageParsers = 0;
 
@@ -1913,95 +1907,74 @@ function filterAllowedChannels(
 	return channels.filter((channel) => allowedSet.has(channel.id));
 }
 
-const normalizeTokenModels = (raw?: string | null): string[] | null => {
-	const parsed = safeJsonParse<string[] | null>(raw ?? null, null);
-	if (!parsed || !Array.isArray(parsed) || parsed.length === 0) {
-		return null;
-	}
-	return parsed.map((item) => String(item));
+type RoutableChannelSkip = {
+	channelId: string;
+	channelName: string | null;
+	reason: string;
+	recordModel: string | null;
+	upstreamProvider: ProviderType;
+	hasModelList: boolean;
 };
 
-function hashSelectionSeed(value: string): number {
-	let hash = 0;
-	for (let index = 0; index < value.length; index += 1) {
-		hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+function resolveAttemptableChannels(options: {
+	channels: ChannelRecord[];
+	callTokenMap: Map<string, CallTokenItem[]>;
+	downstreamModel: string | null;
+	downstreamProvider: ProviderType;
+	endpointType: EndpointType;
+	verifiedModelsByChannel: Map<string, Set<string>>;
+}): {
+	channels: ChannelRecord[];
+	skipped: RoutableChannelSkip[];
+} {
+	const routableChannels: ChannelRecord[] = [];
+	const skipped: RoutableChannelSkip[] = [];
+	for (const channel of options.channels) {
+		const target = resolveChannelAttemptTarget({
+			channel,
+			tokens: options.callTokenMap.get(channel.id) ?? [],
+			downstreamModel: options.downstreamModel,
+			verifiedModelsByChannel: options.verifiedModelsByChannel,
+			endpointType: options.endpointType,
+			downstreamProvider: options.downstreamProvider,
+		});
+		if (target.eligible) {
+			routableChannels.push(channel);
+			continue;
+		}
+		skipped.push({
+			channelId: channel.id,
+			channelName: channel.name ?? null,
+			reason: target.reason ?? "unknown",
+			recordModel: target.recordModel,
+			upstreamProvider: target.upstreamProvider,
+			hasModelList: target.tokenSelection.hasModelList,
+		});
 	}
-	return hash;
+	return {
+		channels: routableChannels,
+		skipped,
+	};
 }
 
-function pickTokenBySelectionKey(
-	tokens: CallTokenItem[],
-	selectionKey: string | null | undefined,
-	selectionOffset = 0,
-): CallTokenItem | null {
-	if (tokens.length === 0) {
-		return null;
+function buildNoRoutableChannelsMeta(skipped: RoutableChannelSkip[]): string {
+	const reasonCounts: Record<string, number> = {};
+	for (const item of skipped) {
+		reasonCounts[item.reason] = (reasonCounts[item.reason] ?? 0) + 1;
 	}
-	const safeOffset = Number.isFinite(selectionOffset)
-		? Math.max(0, Math.floor(selectionOffset))
-		: 0;
-	if (!selectionKey) {
-		return tokens[safeOffset % tokens.length] ?? tokens[0] ?? null;
-	}
-	const index =
-		(hashSelectionSeed(selectionKey) + safeOffset) % Math.max(1, tokens.length);
-	return tokens[index] ?? tokens[0] ?? null;
+	return JSON.stringify({
+		type: "channel_attemptability",
+		reason_counts: reasonCounts,
+		channels: skipped.slice(0, 20).map((item) => ({
+			channel_id: item.channelId,
+			channel_name: item.channelName,
+			reason: item.reason,
+			model: item.recordModel,
+			upstream_provider: item.upstreamProvider,
+			has_model_list: item.hasModelList,
+		})),
+	});
 }
-
-const selectTokenForModel = (
-	tokens: CallTokenItem[],
-	model: string | null,
-	selectionKey?: string | null,
-	selectionOffset = 0,
-): { token: CallTokenItem | null; hasModelList: boolean } => {
-	if (tokens.length === 0) {
-		return { token: null, hasModelList: false };
-	}
-	if (!model) {
-		return {
-			token: pickTokenBySelectionKey(tokens, selectionKey, selectionOffset),
-			hasModelList: false,
-		};
-	}
-	const tokensWithModels = tokens.map((token) => ({
-		token,
-		models: normalizeTokenModels(token.models_json),
-	}));
-	const hasModelList = tokensWithModels.some((entry) => entry.models);
-	if (!hasModelList) {
-		return {
-			token: pickTokenBySelectionKey(tokens, selectionKey, selectionOffset),
-			hasModelList: false,
-		};
-	}
-	const matchedTokens = tokensWithModels
-		.filter((entry) => entry.models?.includes(model))
-		.map((entry) => entry.token);
-	if (matchedTokens.length > 0) {
-		return {
-			token: pickTokenBySelectionKey(
-				matchedTokens,
-				selectionKey,
-				selectionOffset,
-			),
-			hasModelList,
-		};
-	}
-	const unscopedTokens = tokensWithModels
-		.filter((entry) => !entry.models)
-		.map((entry) => entry.token);
-	if (unscopedTokens.length > 0) {
-		return {
-			token: pickTokenBySelectionKey(
-				unscopedTokens,
-				selectionKey,
-				selectionOffset,
-			),
-			hasModelList,
-		};
-	}
-	return { token: null, hasModelList };
-};
 
 function resolveChannelBaseUrl(channel: ChannelRecord): string {
 	return normalizeBaseUrl(channel.base_url);
@@ -3180,11 +3153,20 @@ proxy.all("/*", tokenAuth, async (c) => {
 				allowedChannels.map((channel) => channel.id),
 			)
 		: new Map<string, Set<string>>();
-	let candidates = selectCandidateChannels(
+	const modelCompatibleCandidates = selectCandidateChannels(
 		allowedChannels,
 		downstreamModel,
 		verifiedModelsByChannel,
 	);
+	const routableCandidates = resolveAttemptableChannels({
+		channels: modelCompatibleCandidates,
+		callTokenMap,
+		downstreamModel,
+		downstreamProvider,
+		endpointType,
+		verifiedModelsByChannel,
+	});
+	let candidates = routableCandidates.channels;
 	const canResolveResponsesAffinity = Boolean(c.env.KV_HOT);
 	const hasUnresolvedToolOutput =
 		endpointType === "responses"
@@ -3392,6 +3374,27 @@ proxy.all("/*", tokenAuth, async (c) => {
 				);
 			}
 		}
+	}
+
+	if (
+		modelCompatibleCandidates.length > 0 &&
+		candidates.length === 0 &&
+		routableCandidates.skipped.length > 0
+	) {
+		recordEarlyUsage({
+			status: 503,
+			code: NO_ROUTABLE_CHANNELS_ERROR_CODE,
+			message: NO_ROUTABLE_CHANNELS_ERROR_CODE,
+			failureStage: "channel_select",
+			failureReason: NO_ROUTABLE_CHANNELS_ERROR_CODE,
+			usageSource: "none",
+			errorMetaJson: buildNoRoutableChannelsMeta(routableCandidates.skipped),
+		});
+		return jsonErrorWithTrace(
+			503,
+			NO_ROUTABLE_CHANNELS_ERROR_CODE,
+			NO_ROUTABLE_CHANNELS_ERROR_CODE,
+		);
 	}
 
 	if (candidates.length === 0) {
@@ -3709,37 +3712,25 @@ proxy.all("/*", tokenAuth, async (c) => {
 		for (const channel of ordered) {
 			const attemptStart = Date.now();
 			const attemptStartedAt = new Date(attemptStart).toISOString();
-			const metadata = parseChannelMetadata(channel.metadata_json);
-			const upstreamProvider = resolveProvider(metadata.site_type);
-			const resolvedModel = resolveUpstreamModelForChannel(
+			const attemptTarget = resolveChannelAttemptTarget({
 				channel,
-				metadata,
+				tokens: callTokenMap.get(channel.id) ?? [],
 				downstreamModel,
 				verifiedModelsByChannel,
-			);
-			const upstreamModel = resolvedModel.model;
-			if (!upstreamModel && downstreamModel) {
+				endpointType,
+				downstreamProvider,
+				selectionKey: `${traceId}:${channel.id}:${downstreamModel ?? "*"}`,
+			});
+			if (!attemptTarget.eligible) {
 				continue;
 			}
-			const recordModel = upstreamModel ?? downstreamModel;
-			if (
-				upstreamProvider === "gemini" &&
-				!upstreamModel &&
-				endpointType !== "passthrough"
-			) {
-				continue;
-			}
+			const metadata = attemptTarget.metadata;
+			const upstreamProvider = attemptTarget.upstreamProvider;
+			const upstreamModel = attemptTarget.upstreamModel;
+			const recordModel = attemptTarget.recordModel;
 			const baseUrl = resolveChannelBaseUrl(channel);
-			const tokens = callTokenMap.get(channel.id) ?? [];
-			const selection = selectTokenForModel(
-				tokens,
-				recordModel,
-				`${traceId}:${channel.id}:${recordModel ?? "*"}`,
-			);
-			if (!selection.token && selection.hasModelList && recordModel) {
-				continue;
-			}
-			const apiKey = selection.token?.api_key ?? channel.api_key;
+			const apiKey =
+				attemptTarget.tokenSelection.token?.api_key ?? channel.api_key;
 			const headers = buildUpstreamHeaders(
 				new Headers(c.req.header()),
 				upstreamProvider,
@@ -4498,42 +4489,30 @@ proxy.all("/*", tokenAuth, async (c) => {
 				continue;
 			}
 			const attemptNumber = attemptIndex + 1;
+			const attemptTarget = resolveChannelAttemptTarget({
+				channel,
+				tokens: callTokenMap.get(channel.id) ?? [],
+				downstreamModel,
+				verifiedModelsByChannel,
+				endpointType,
+				downstreamProvider,
+				selectionKey: `${traceId}:${channel.id}:${downstreamModel ?? "*"}`,
+				selectionOffset: attemptNumber - 1,
+			});
+			if (!attemptTarget.eligible) {
+				continue;
+			}
 			attemptsExecuted = Math.max(attemptsExecuted, attemptNumber);
 			const attemptStart = Date.now();
 			const attemptStartedAt = new Date(attemptStart).toISOString();
-			const metadata = parseChannelMetadata(channel.metadata_json);
-			const upstreamProvider = resolveProvider(metadata.site_type);
-			const resolvedModel = resolveUpstreamModelForChannel(
-				channel,
-				metadata,
-				downstreamModel,
-				verifiedModelsByChannel,
-			);
-			const upstreamModel = resolvedModel.model;
-			if (!upstreamModel && downstreamModel) {
-				continue;
-			}
-			const recordModel = upstreamModel ?? downstreamModel;
-			if (
-				upstreamProvider === "gemini" &&
-				!upstreamModel &&
-				endpointType !== "passthrough"
-			) {
-				continue;
-			}
+			const metadata = attemptTarget.metadata;
+			const upstreamProvider = attemptTarget.upstreamProvider;
+			const upstreamModel = attemptTarget.upstreamModel;
+			const recordModel = attemptTarget.recordModel;
 
 			const baseUrl = resolveChannelBaseUrl(channel);
-			const tokens = callTokenMap.get(channel.id) ?? [];
-			const selection = selectTokenForModel(
-				tokens,
-				recordModel,
-				`${traceId}:${channel.id}:${recordModel ?? "*"}`,
-				attemptNumber - 1,
-			);
-			if (!selection.token && selection.hasModelList && recordModel) {
-				continue;
-			}
-			const apiKey = selection.token?.api_key ?? channel.api_key;
+			const apiKey =
+				attemptTarget.tokenSelection.token?.api_key ?? channel.api_key;
 			const headers = buildUpstreamHeaders(
 				new Headers(c.req.header()),
 				upstreamProvider,
@@ -5584,6 +5563,39 @@ proxy.all("/*", tokenAuth, async (c) => {
 		if (lastErrorDetails) {
 			const errorCode = lastErrorDetails.errorCode ?? "upstream_unavailable";
 			return jsonErrorWithTrace(502, errorCode, errorCode);
+		}
+		if (ordered.length > 0 && attemptsExecuted === 0) {
+			const skippedChannels = Array.from(
+				new Map(
+					ordered.map((channel) => [
+						channel.id,
+						{
+							channelId: channel.id,
+							channelName: channel.name ?? null,
+							reason: "skipped_before_upstream_call",
+							recordModel: downstreamModel,
+							upstreamProvider: downstreamProvider,
+							hasModelList: (callTokenMap.get(channel.id) ?? []).some((token) =>
+								Boolean(token.models_json),
+							),
+						},
+					]),
+				).values(),
+			);
+			recordEarlyUsage({
+				status: 503,
+				code: NO_ROUTABLE_CHANNELS_ERROR_CODE,
+				message: NO_ROUTABLE_CHANNELS_ERROR_CODE,
+				failureStage: "channel_select",
+				failureReason: NO_ROUTABLE_CHANNELS_ERROR_CODE,
+				usageSource: "none",
+				errorMetaJson: buildNoRoutableChannelsMeta(skippedChannels),
+			});
+			return jsonErrorWithTrace(
+				503,
+				NO_ROUTABLE_CHANNELS_ERROR_CODE,
+				NO_ROUTABLE_CHANNELS_ERROR_CODE,
+			);
 		}
 		recordEarlyUsage({
 			status: 502,
