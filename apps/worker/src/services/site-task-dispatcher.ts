@@ -144,6 +144,7 @@ export async function verifySitesByIds(
 	db: D1Database,
 	ids?: string[],
 ): Promise<SiteVerificationBatchResult> {
+	const runtime = await getSiteTaskRuntime(db);
 	const allChannels = await listChannels(db, {
 		orderBy: "created_at",
 		order: "DESC",
@@ -161,38 +162,41 @@ export async function verifySitesByIds(
 		list.push(row);
 		tokenMap.set(row.channel_id, list);
 	}
-	const items: SiteVerificationResult[] = [];
-	for (const channel of channels) {
-		const channelTokens = tokenMap.get(channel.id) ?? [];
-		const tokens =
-			channelTokens.length > 0
-				? channelTokens.map((row) => ({
-						id: row.id,
-						name: row.name,
-						api_key: row.api_key,
-						models_json: row.models_json ?? null,
-					}))
-				: [
-						{
-							id: "primary",
-							name: "主调用令牌",
-							api_key: String(channel.api_key ?? ""),
-							models_json: null,
-						},
-					];
-		const result = await verifySiteChannel({
-			channel,
-			tokens,
-			mode: "service",
-		});
-		await persistSiteVerificationResult({
-			db,
-			channel,
-			tokens,
-			result,
-		});
-		items.push(result);
-	}
+	const items = await mapWithConcurrency(
+		channels,
+		runtime.concurrency,
+		async (channel) => {
+			const channelTokens = tokenMap.get(channel.id) ?? [];
+			const tokens =
+				channelTokens.length > 0
+					? channelTokens.map((row) => ({
+							id: row.id,
+							name: row.name,
+							api_key: row.api_key,
+							models_json: row.models_json ?? null,
+						}))
+					: [
+							{
+								id: "primary",
+								name: "主调用令牌",
+								api_key: String(channel.api_key ?? ""),
+								models_json: null,
+							},
+						];
+			const result = await verifySiteChannel({
+				channel,
+				tokens,
+				mode: "service",
+			});
+			await persistSiteVerificationResult({
+				db,
+				channel,
+				tokens,
+				result,
+			});
+			return result;
+		},
+	);
 	return buildVerificationBatchResult(items);
 }
 

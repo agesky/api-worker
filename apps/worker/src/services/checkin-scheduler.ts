@@ -13,11 +13,14 @@ import { executeBackupSync } from "./backup-sync";
 import {
 	getBackupScheduleEnabled,
 	getBackupScheduleTime,
+	getChannelRefreshEnabled,
+	getChannelRefreshScheduleTime,
 	getChannelRecoveryProbeEnabled,
 	getChannelRecoveryProbeScheduleTime,
 	getCheckinScheduleTime,
 } from "./settings";
 import {
+	refreshActiveChannelsViaWorker,
 	recoverDisabledChannelsViaWorker,
 	runCheckinAllViaWorker,
 } from "./site-task-dispatcher";
@@ -26,6 +29,7 @@ import { saveSiteTaskReport } from "./site-task-report-store";
 
 const SCHEDULER_NAME = "checkin-scheduler";
 const LAST_RUN_DATE_KEY = "last_run_date";
+const CHANNEL_REFRESH_LAST_RUN_DATE_KEY = "channel_refresh_last_run_date";
 const CHANNEL_RECOVERY_LAST_RUN_DATE_KEY = "channel_recovery_last_run_date";
 const BACKUP_LAST_RUN_DATE_KEY = "backup_last_run_date";
 const INTERNAL_IMMEDIATE_RESCHEDULE_DELAY_MS = 1000;
@@ -69,6 +73,7 @@ export const computeNextAlarmAt = (
 type RescheduleResult = {
 	nextRunAt: string | null;
 	checkinNextRunAt: string | null;
+	channelRefreshNextRunAt: string | null;
 	channelRecoveryNextRunAt: string | null;
 	backupNextRunAt: string | null;
 };
@@ -100,6 +105,10 @@ export class CheckinScheduler {
 		if (request.method === "GET" && url.pathname === "/status") {
 			const lastRunDate =
 				(await this.state.storage.get<string>(LAST_RUN_DATE_KEY)) ?? null;
+			const channelRefreshLastRunDate =
+				(await this.state.storage.get<string>(
+					CHANNEL_REFRESH_LAST_RUN_DATE_KEY,
+				)) ?? null;
 			const channelRecoveryLastRunDate =
 				(await this.state.storage.get<string>(
 					CHANNEL_RECOVERY_LAST_RUN_DATE_KEY,
@@ -112,6 +121,7 @@ export class CheckinScheduler {
 					ok: true,
 					last_run_date: lastRunDate,
 					checkin_last_run_date: lastRunDate,
+					channel_refresh_last_run_date: channelRefreshLastRunDate,
 					channel_recovery_last_run_date: channelRecoveryLastRunDate,
 					backup_last_run_date: backupLastRunDate,
 				}),
@@ -139,6 +149,45 @@ export class CheckinScheduler {
 				items: result.results,
 			});
 			await this.state.storage.put(LAST_RUN_DATE_KEY, beijingDateString(now));
+		}
+		const channelRefreshEnabled = await getChannelRefreshEnabled(this.env.DB);
+		if (channelRefreshEnabled) {
+			const channelRefreshScheduleTime = await getChannelRefreshScheduleTime(
+				this.env.DB,
+			);
+			const channelRefreshLastRunDate =
+				(await this.state.storage.get<string>(
+					CHANNEL_REFRESH_LAST_RUN_DATE_KEY,
+				)) ?? null;
+			if (
+				shouldRunCheckin(
+					now,
+					channelRefreshScheduleTime,
+					channelRefreshLastRunDate,
+				)
+			) {
+				const refreshResult = await refreshActiveChannelsViaWorker(
+					this.env.DB,
+					this.env,
+				);
+				const report = {
+					summary: refreshResult.summary,
+					items: refreshResult.items,
+					runs_at: refreshResult.runsAt,
+				};
+				await saveSiteTaskReport(this.env.DB, {
+					kind: "refresh-active",
+					runs_at: report.runs_at,
+					report,
+				});
+				if (refreshResult.summary.success > 0) {
+					await invalidateSelectionHotCache(this.env.KV_HOT);
+				}
+				await this.state.storage.put(
+					CHANNEL_REFRESH_LAST_RUN_DATE_KEY,
+					beijingDateString(now),
+				);
+			}
 		}
 		const channelRecoveryEnabled = await getChannelRecoveryProbeEnabled(
 			this.env.DB,
@@ -212,6 +261,10 @@ export class CheckinScheduler {
 		reset = false,
 	): Promise<RescheduleResult> {
 		const checkinScheduleTime = await getCheckinScheduleTime(this.env.DB);
+		const channelRefreshEnabled = await getChannelRefreshEnabled(this.env.DB);
+		const channelRefreshScheduleTime = await getChannelRefreshScheduleTime(
+			this.env.DB,
+		);
 		const channelRecoveryEnabled = await getChannelRecoveryProbeEnabled(
 			this.env.DB,
 		);
@@ -221,6 +274,7 @@ export class CheckinScheduler {
 		const backupScheduleTime = await getBackupScheduleTime(this.env.DB);
 		if (reset) {
 			await this.state.storage.delete(LAST_RUN_DATE_KEY);
+			await this.state.storage.delete(CHANNEL_REFRESH_LAST_RUN_DATE_KEY);
 			await this.state.storage.delete(CHANNEL_RECOVERY_LAST_RUN_DATE_KEY);
 			await this.state.storage.delete(BACKUP_LAST_RUN_DATE_KEY);
 		}
@@ -229,6 +283,9 @@ export class CheckinScheduler {
 			checkinScheduleTime,
 			reset,
 		);
+		const channelRefreshNextRunAt = channelRefreshEnabled
+			? computeNextAlarmAt(now, channelRefreshScheduleTime, reset)
+			: null;
 		const channelRecoveryNextRunAt = channelRecoveryEnabled
 			? computeNextAlarmAt(now, channelRecoveryScheduleTime, reset)
 			: null;
@@ -237,6 +294,7 @@ export class CheckinScheduler {
 			: null;
 		const nextCandidates = [
 			checkinNextRunAt,
+			channelRefreshNextRunAt,
 			channelRecoveryNextRunAt,
 			backupNextRunAt,
 		].filter((item): item is Date => Boolean(item));
@@ -250,6 +308,9 @@ export class CheckinScheduler {
 		return {
 			nextRunAt: nextRun.toISOString(),
 			checkinNextRunAt: checkinNextRunAt.toISOString(),
+			channelRefreshNextRunAt: channelRefreshNextRunAt
+				? channelRefreshNextRunAt.toISOString()
+				: null,
 			channelRecoveryNextRunAt: channelRecoveryNextRunAt
 				? channelRecoveryNextRunAt.toISOString()
 				: null,

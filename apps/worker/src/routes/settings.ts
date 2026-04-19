@@ -6,6 +6,8 @@ import {
 } from "../services/checkin-scheduler";
 import { triggerBackupAfterDataChange } from "../services/backup-auto-sync";
 import {
+	getChannelRefreshEnabled,
+	getChannelRefreshScheduleTime,
 	getChannelRecoveryProbeEnabled,
 	getChannelRecoveryProbeScheduleTime,
 	getCheckinScheduleTime,
@@ -15,6 +17,8 @@ import {
 	getSessionTtlHours,
 	isAdminPasswordSet,
 	normalizeErrorCodeList,
+	setChannelRefreshEnabled,
+	setChannelRefreshScheduleTime,
 	setChannelRecoveryProbeEnabled,
 	setChannelRecoveryProbeScheduleTime,
 	setAdminPasswordHash,
@@ -37,6 +41,8 @@ settings.get("/", async (c) => {
 	const sessionTtlHours = await getSessionTtlHours(db);
 	const adminPasswordSet = await isAdminPasswordSet(db);
 	const checkinScheduleTime = await getCheckinScheduleTime(db);
+	const channelRefreshEnabled = await getChannelRefreshEnabled(db);
+	const channelRefreshScheduleTime = await getChannelRefreshScheduleTime(db);
 	const channelRecoveryProbeEnabled = await getChannelRecoveryProbeEnabled(db);
 	const channelRecoveryProbeScheduleTime =
 		await getChannelRecoveryProbeScheduleTime(db);
@@ -48,6 +54,8 @@ settings.get("/", async (c) => {
 		session_ttl_hours: sessionTtlHours,
 		admin_password_set: adminPasswordSet,
 		checkin_schedule_time: checkinScheduleTime,
+		channel_refresh_enabled: channelRefreshEnabled,
+		channel_refresh_schedule_time: channelRefreshScheduleTime,
 		channel_recovery_probe_enabled: channelRecoveryProbeEnabled,
 		channel_recovery_probe_schedule_time: channelRecoveryProbeScheduleTime,
 		proxy_model_failure_cooldown_minutes:
@@ -599,6 +607,69 @@ settings.put("/", async (c) => {
 			);
 		}
 		await setCheckinScheduleTime(db, timeValue);
+		touched = true;
+		scheduleTouched = true;
+		scheduleReset = scheduleReset || shouldResetLastRun(currentTime, timeValue);
+	}
+
+	if (body.channel_refresh_enabled !== undefined) {
+		const raw = body.channel_refresh_enabled;
+		let enabled: boolean | null = null;
+		if (typeof raw === "boolean") {
+			enabled = raw;
+		} else if (typeof raw === "number") {
+			enabled = raw !== 0;
+		} else if (typeof raw === "string") {
+			const normalized = raw.trim().toLowerCase();
+			if (["1", "true", "yes", "on"].includes(normalized)) {
+				enabled = true;
+			} else if (["0", "false", "no", "off"].includes(normalized)) {
+				enabled = false;
+			}
+		}
+		if (enabled === null) {
+			return jsonError(
+				c,
+				400,
+				"invalid_channel_refresh_enabled",
+				"invalid_channel_refresh_enabled",
+			);
+		}
+		const currentEnabled = await getChannelRefreshEnabled(db);
+		await setChannelRefreshEnabled(db, enabled);
+		touched = true;
+		scheduleTouched = true;
+		scheduleReset = scheduleReset || (!currentEnabled && enabled);
+	}
+
+	if (body.channel_refresh_schedule_time !== undefined) {
+		const currentTime = await getChannelRefreshScheduleTime(db);
+		const timeValue = String(body.channel_refresh_schedule_time).trim();
+		if (!/^\d{2}:\d{2}$/.test(timeValue)) {
+			return jsonError(
+				c,
+				400,
+				"invalid_channel_refresh_schedule_time",
+				"invalid_channel_refresh_schedule_time",
+			);
+		}
+		const [hour, minute] = timeValue.split(":").map((value) => Number(value));
+		if (
+			Number.isNaN(hour) ||
+			Number.isNaN(minute) ||
+			hour < 0 ||
+			hour > 23 ||
+			minute < 0 ||
+			minute > 59
+		) {
+			return jsonError(
+				c,
+				400,
+				"invalid_channel_refresh_schedule_time",
+				"invalid_channel_refresh_schedule_time",
+			);
+		}
+		await setChannelRefreshScheduleTime(db, timeValue);
 		touched = true;
 		scheduleTouched = true;
 		scheduleReset = scheduleReset || shouldResetLastRun(currentTime, timeValue);

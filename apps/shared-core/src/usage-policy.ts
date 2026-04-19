@@ -39,7 +39,10 @@ export function shouldTreatMissingUsageAsError(
 	if (input.isStream) {
 		return false;
 	}
-	return true;
+	if (input.bodyParsingSkipped) {
+		return false;
+	}
+	return input.hasUsageSignal;
 }
 
 export function shouldParseSuccessStreamUsage(

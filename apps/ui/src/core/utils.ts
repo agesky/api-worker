@@ -67,6 +67,14 @@ export const formatChinaDateTime = (value?: string | null) =>
 		{ date: " " },
 	);
 
+export const formatChinaDateTimeMinute = (value?: string | null) =>
+	formatInTimeZone(
+		value,
+		"Asia/Shanghai",
+		["year", "month", "day", "hour", "minute"],
+		{ date: " " },
+	);
+
 export const toChinaDateTimeInput = (value?: string | null) => {
 	if (!value) {
 		return "";

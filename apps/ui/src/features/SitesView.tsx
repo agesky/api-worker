@@ -12,12 +12,13 @@ import {
 	DialogTitle,
 	Input,
 	Pagination,
-	Select,
+	SingleSelect,
 	Switch,
 	Tooltip,
 } from "../components/ui";
 import {
 	getSiteCheckinLabel,
+	getSiteStatusLabel,
 	getPrimaryVerificationIssue,
 	getSuggestedActionLabel,
 	getSiteTypeLabel,
@@ -37,6 +38,7 @@ import type {
 } from "../core/types";
 import {
 	buildPageItems,
+	formatChinaDateTimeMinute,
 	getBeijingDateString,
 	loadColumnPrefs,
 	persistColumnPrefs,
@@ -78,6 +80,18 @@ type SitesViewProps = {
 };
 
 const pageSizeOptions = [10, 20, 50];
+const siteTypeOptions = [
+	{ value: "new-api", label: getSiteTypeLabel("new-api") },
+	{ value: "done-hub", label: getSiteTypeLabel("done-hub") },
+	{ value: "subapi", label: getSiteTypeLabel("subapi") },
+	{ value: "openai", label: getSiteTypeLabel("openai") },
+	{ value: "anthropic", label: getSiteTypeLabel("anthropic") },
+	{ value: "gemini", label: getSiteTypeLabel("gemini") },
+];
+const siteStatusOptions = [
+	{ value: "active", label: getSiteStatusLabel("active") },
+	{ value: "disabled", label: getSiteStatusLabel("disabled") },
+];
 const sortableColumns: Array<{ key: SiteSortKey; label: string }> = [
 	{ key: "name", label: "站点" },
 	{ key: "type", label: "类型" },
@@ -151,6 +165,8 @@ const formatTaskTime = (value: string) =>
 		minute: "2-digit",
 		hour12: false,
 	});
+
+const formatTaskDateTime = (value: string) => formatChinaDateTimeMinute(value);
 
 const normalizeCallTokenOrder = (tokens: SiteForm["call_tokens"]) =>
 	tokens.map((token, index) => ({
@@ -1159,7 +1175,7 @@ export const SitesView = ({
 							<div>
 								<DialogTitle>签到已启用站点</DialogTitle>
 								<DialogDescription>
-									最后记录 {formatTaskTime(checkinTask.runs_at)}。
+									最后记录 {formatTaskDateTime(checkinTask.runs_at)}。
 								</DialogDescription>
 							</div>
 							<Button size="sm" type="button" onClick={closeTaskReport}>
@@ -1220,7 +1236,7 @@ export const SitesView = ({
 							<div>
 								<DialogTitle>检查启用渠道</DialogTitle>
 								<DialogDescription>
-									最后记录 {formatTaskTime(verifyActiveTask.runs_at)}。
+									最后记录 {formatTaskDateTime(verifyActiveTask.runs_at)}。
 								</DialogDescription>
 							</div>
 							<Button size="sm" type="button" onClick={closeTaskReport}>
@@ -1321,7 +1337,7 @@ export const SitesView = ({
 							<div>
 								<DialogTitle>检查停用渠道</DialogTitle>
 								<DialogDescription>
-									最后记录 {formatTaskTime(verifyDisabledTask.runs_at)}。
+									最后记录 {formatTaskDateTime(verifyDisabledTask.runs_at)}。
 								</DialogDescription>
 							</div>
 							<Button size="sm" type="button" onClick={closeTaskReport}>
@@ -1418,7 +1434,7 @@ export const SitesView = ({
 						<div>
 							<DialogTitle>更新启用渠道</DialogTitle>
 							<DialogDescription>
-								最后记录 {formatTaskTime(refreshTask.runs_at)}。
+								最后记录 {formatTaskDateTime(refreshTask.runs_at)}。
 							</DialogDescription>
 						</div>
 						<Button size="sm" type="button" onClick={closeTaskReport}>
@@ -1490,14 +1506,14 @@ export const SitesView = ({
 	return (
 		<div class="space-y-5">
 			<div class="app-panel animate-fade-up space-y-4">
-				<div class="flex items-start gap-3">
-					<div class="min-w-0 flex-1">
+				<div class="flex flex-col gap-3 2xl:flex-row 2xl:items-start">
+					<div class="min-w-0 flex-1 2xl:max-w-3xl">
 						<h3 class="app-title text-lg">站点管理</h3>
-						<p class="app-subtitle">
+						<p class="app-subtitle max-w-3xl break-words pr-1 leading-5">
 							统一维护调用令牌、系统令牌与站点类型，并支持签到、检查、恢复与更新。
 						</p>
 					</div>
-					<div class="ml-auto flex max-w-full flex-nowrap items-center justify-end gap-2 overflow-x-auto pb-1">
+					<div class="flex w-full max-w-full flex-wrap items-center gap-2 pb-1 2xl:ml-auto 2xl:w-auto 2xl:flex-nowrap 2xl:justify-end">
 						<div class="shrink-0">
 							<ColumnPicker
 								columns={siteColumnOptions}
@@ -2085,30 +2101,19 @@ export const SitesView = ({
 										/>
 									</div>
 									<div>
-										<label
-											class="mb-1.5 block text-xs uppercase tracking-widest text-[color:var(--app-ink-muted)]"
-											for="site-type"
-										>
+										<label class="mb-1.5 block text-xs uppercase tracking-widest text-[color:var(--app-ink-muted)]">
 											站点类型
 										</label>
-										<Select
-											id="site-type"
-											name="site_type"
+										<SingleSelect
+											class="w-full"
 											value={siteForm.site_type}
-											onChange={(event) =>
+											options={siteTypeOptions}
+											onChange={(next) =>
 												onFormChange({
-													site_type: (event.currentTarget as HTMLSelectElement)
-														.value as Site["site_type"],
+													site_type: next as Site["site_type"],
 												})
 											}
-										>
-											<option value="new-api">new-api</option>
-											<option value="done-hub">done-hub</option>
-											<option value="subapi">subapi</option>
-											<option value="openai">openai</option>
-											<option value="anthropic">Anthropic</option>
-											<option value="gemini">gemini</option>
-										</Select>
+										/>
 									</div>
 								</div>
 								<div class="mt-4">
@@ -2157,26 +2162,19 @@ export const SitesView = ({
 										/>
 									</div>
 									<div>
-										<label
-											class="mb-1.5 block text-xs uppercase tracking-widest text-[color:var(--app-ink-muted)]"
-											for="site-status"
-										>
+										<label class="mb-1.5 block text-xs uppercase tracking-widest text-[color:var(--app-ink-muted)]">
 											站点状态
 										</label>
-										<Select
-											id="site-status"
-											name="status"
+										<SingleSelect
+											class="w-full"
 											value={siteForm.status}
-											onChange={(event) =>
+											options={siteStatusOptions}
+											onChange={(next) =>
 												onFormChange({
-													status: (event.currentTarget as HTMLSelectElement)
-														.value,
+													status: next,
 												})
 											}
-										>
-											<option value="active">启用</option>
-											<option value="disabled">禁用</option>
-										</Select>
+										/>
 									</div>
 								</div>
 							</Card>

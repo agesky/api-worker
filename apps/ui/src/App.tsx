@@ -64,6 +64,7 @@ import type {
 	UsageResponse,
 } from "./core/types";
 import {
+	formatChinaDateTimeMinute,
 	getBeijingDateString,
 	loadPageSizePref,
 	persistPageSizePref,
@@ -784,6 +785,9 @@ const App = () => {
 			session_ttl_hours: String(data.settings.session_ttl_hours ?? 12),
 			admin_password: "",
 			checkin_schedule_time: data.settings.checkin_schedule_time ?? "00:10",
+			channel_refresh_enabled: data.settings.channel_refresh_enabled ?? false,
+			channel_refresh_schedule_time:
+				data.settings.channel_refresh_schedule_time ?? "02:40",
 			channel_recovery_probe_enabled:
 				data.settings.channel_recovery_probe_enabled ?? false,
 			channel_recovery_probe_schedule_time:
@@ -1607,6 +1611,8 @@ const App = () => {
 			const upstreamTimeoutMs = Number(settingsForm.proxy_upstream_timeout_ms);
 			const retryMaxRetries = Number(settingsForm.proxy_retry_max_retries);
 			const retrySleepMs = Number(settingsForm.proxy_retry_sleep_ms);
+			const channelRefreshScheduleTime =
+				settingsForm.channel_refresh_schedule_time.trim();
 			const channelRecoveryProbeScheduleTime =
 				settingsForm.channel_recovery_probe_schedule_time.trim();
 			const normalizeErrorCodeList = (value: string[]): string[] => {
@@ -1775,6 +1781,10 @@ const App = () => {
 				pushNotice("warning", "禁用渠道抽测时间需为 HH:mm");
 				return;
 			}
+			if (!/^\d{2}:\d{2}$/.test(channelRefreshScheduleTime)) {
+				pushNotice("warning", "启用渠道更新时间需为 HH:mm");
+				return;
+			}
 			const backupScheduleTime = backupSettings.schedule_time.trim();
 			if (!/^\d{2}:\d{2}$/.test(backupScheduleTime)) {
 				pushNotice("warning", "定时备份时间需为 HH:mm");
@@ -1803,6 +1813,8 @@ const App = () => {
 				session_ttl_hours: sessionTtlHours,
 				checkin_schedule_time:
 					settingsForm.checkin_schedule_time.trim() || "00:10",
+				channel_refresh_enabled: settingsForm.channel_refresh_enabled,
+				channel_refresh_schedule_time: channelRefreshScheduleTime,
 				channel_recovery_probe_enabled:
 					settingsForm.channel_recovery_probe_enabled,
 				channel_recovery_probe_schedule_time: channelRecoveryProbeScheduleTime,
@@ -2842,6 +2854,16 @@ const App = () => {
 								</p>
 								<p class="mt-1 text-sm font-semibold text-[color:var(--app-ink)]">
 									{siteVerificationDialog.result.selected_model ?? "未选择"}
+								</p>
+							</div>
+							<div>
+								<p class="text-xs uppercase tracking-widest text-[color:var(--app-ink-muted)]">
+									检查时间
+								</p>
+								<p class="mt-1 text-sm font-semibold text-[color:var(--app-ink)]">
+									{formatChinaDateTimeMinute(
+										siteVerificationDialog.result.checked_at,
+									)}
 								</p>
 							</div>
 							<div>

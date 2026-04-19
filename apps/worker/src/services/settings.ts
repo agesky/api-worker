@@ -6,6 +6,8 @@ import { nowIso, parseScheduleTime } from "../utils/time";
 const DEFAULT_LOG_RETENTION_DAYS = 30;
 const DEFAULT_SESSION_TTL_HOURS = 12;
 const DEFAULT_CHECKIN_SCHEDULE_TIME = "00:10";
+const DEFAULT_CHANNEL_REFRESH_ENABLED = false;
+const DEFAULT_CHANNEL_REFRESH_SCHEDULE_TIME = "02:40";
 const DEFAULT_CHANNEL_RECOVERY_PROBE_ENABLED = false;
 const DEFAULT_CHANNEL_RECOVERY_PROBE_SCHEDULE_TIME = "03:10";
 const DEFAULT_MODEL_FAILURE_COOLDOWN_MINUTES = 720;
@@ -69,6 +71,8 @@ const RETENTION_KEY = "log_retention_days";
 const SESSION_TTL_KEY = "session_ttl_hours";
 const ADMIN_PASSWORD_HASH_KEY = "admin_password_hash";
 const CHECKIN_SCHEDULE_TIME_KEY = "checkin_schedule_time";
+const CHANNEL_REFRESH_ENABLED_KEY = "channel_refresh_enabled";
+const CHANNEL_REFRESH_SCHEDULE_TIME_KEY = "channel_refresh_schedule_time";
 const CHANNEL_RECOVERY_PROBE_ENABLED_KEY = "channel_recovery_probe_enabled";
 const CHANNEL_RECOVERY_PROBE_SCHEDULE_TIME_KEY =
 	"channel_recovery_probe_schedule_time";
@@ -266,6 +270,8 @@ let retentionSnapshot: SettingSnapshot<number> | null = null;
 let sessionTtlSnapshot: SettingSnapshot<number> | null = null;
 let adminPasswordSnapshot: SettingSnapshot<string | null> | null = null;
 let checkinScheduleSnapshot: SettingSnapshot<string> | null = null;
+let channelRefreshEnabledSnapshot: SettingSnapshot<boolean> | null = null;
+let channelRefreshScheduleSnapshot: SettingSnapshot<string> | null = null;
 let channelRecoveryProbeEnabledSnapshot: SettingSnapshot<boolean> | null = null;
 let channelRecoveryProbeScheduleSnapshot: SettingSnapshot<string> | null = null;
 let modelCooldownSnapshot: SettingSnapshot<number> | null = null;
@@ -972,6 +978,55 @@ export async function setCheckinScheduleTime(
 ): Promise<void> {
 	await upsertSetting(db, CHECKIN_SCHEDULE_TIME_KEY, time);
 	checkinScheduleSnapshot = null;
+}
+
+export async function getChannelRefreshEnabled(
+	db: D1Database,
+): Promise<boolean> {
+	return getCachedSetting(
+		channelRefreshEnabledSnapshot,
+		async () => {
+			const raw = await readSetting(db, CHANNEL_REFRESH_ENABLED_KEY);
+			return parseBooleanSetting(raw, DEFAULT_CHANNEL_REFRESH_ENABLED);
+		},
+		(next) => {
+			channelRefreshEnabledSnapshot = next;
+		},
+	);
+}
+
+export async function setChannelRefreshEnabled(
+	db: D1Database,
+	enabled: boolean,
+): Promise<void> {
+	await upsertSetting(db, CHANNEL_REFRESH_ENABLED_KEY, enabled ? "1" : "0");
+	channelRefreshEnabledSnapshot = null;
+}
+
+export async function getChannelRefreshScheduleTime(
+	db: D1Database,
+): Promise<string> {
+	return getCachedSetting(
+		channelRefreshScheduleSnapshot,
+		async () => {
+			const raw = await readSetting(db, CHANNEL_REFRESH_SCHEDULE_TIME_KEY);
+			if (raw && parseScheduleTime(raw)) {
+				return raw;
+			}
+			return DEFAULT_CHANNEL_REFRESH_SCHEDULE_TIME;
+		},
+		(next) => {
+			channelRefreshScheduleSnapshot = next;
+		},
+	);
+}
+
+export async function setChannelRefreshScheduleTime(
+	db: D1Database,
+	time: string,
+): Promise<void> {
+	await upsertSetting(db, CHANNEL_REFRESH_SCHEDULE_TIME_KEY, time);
+	channelRefreshScheduleSnapshot = null;
 }
 
 export async function getChannelRecoveryProbeEnabled(

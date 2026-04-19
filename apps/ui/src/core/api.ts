@@ -42,6 +42,11 @@ export const createApiFetch = (
 				}>;
 			} | null;
 			const fallbackMessage = `HTTP ${response.status}`;
+			if (response.status === 504) {
+				throw new Error(
+					"请求超时（504），任务执行时间过长，请稍后重试或调整系统设置中的站点任务并发/超时。",
+				);
+			}
 			const errorText =
 				typeof payload?.error === "string" && payload.error.trim().length > 0
 					? payload.error

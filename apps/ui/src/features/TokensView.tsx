@@ -11,8 +11,9 @@ import {
 	DialogHeader,
 	DialogTitle,
 	Input,
+	MultiSelect,
 	Pagination,
-	Select,
+	SingleSelect,
 } from "../components/ui";
 import type { Site, Token, TokenForm } from "../core/types";
 import {
@@ -22,6 +23,11 @@ import {
 	loadColumnPrefs,
 	persistColumnPrefs,
 } from "../core/utils";
+
+const tokenStatusOptions = [
+	{ value: "active", label: "启用" },
+	{ value: "disabled", label: "禁用" },
+];
 
 type TokensViewProps = {
 	pagedTokens: Token[];
@@ -130,17 +136,15 @@ export const TokensView = ({
 		[visibleColumnSet],
 	);
 	const displayPages = tokenTotal === 0 ? 0 : tokenTotalPages;
-	const selectedChannels = new Set(tokenForm.allowed_channels);
-	const toggleChannel = (channelId: string) => {
-		const next = new Set(selectedChannels);
-		if (next.has(channelId)) {
-			next.delete(channelId);
-		} else {
-			next.add(channelId);
-		}
-		onFormChange({ allowed_channels: Array.from(next) });
-	};
 	const clearChannels = () => onFormChange({ allowed_channels: [] });
+	const channelOptions = useMemo(
+		() =>
+			sites.map((site) => ({
+				value: site.id,
+				label: site.name ?? site.id,
+			})),
+		[sites],
+	);
 
 	useEffect(() => {
 		if (!isTokenModalOpen) {
@@ -533,25 +537,19 @@ export const TokensView = ({
 								/>
 							</div>
 							<div>
-								<label
-									class="mb-1.5 block text-xs uppercase tracking-widest text-[color:var(--app-ink-muted)]"
-									for="token-status"
-								>
+								<label class="mb-1.5 block text-xs uppercase tracking-widest text-[color:var(--app-ink-muted)]">
 									状态
 								</label>
-								<Select
-									id="token-status"
-									name="status"
+								<SingleSelect
+									class="w-full"
 									value={tokenForm.status}
-									onChange={(event) =>
+									options={tokenStatusOptions}
+									onChange={(next) =>
 										onFormChange({
-											status: (event.currentTarget as HTMLSelectElement).value,
+											status: next,
 										})
 									}
-								>
-									<option value="active">启用</option>
-									<option value="disabled">禁用</option>
-								</Select>
+								/>
 							</div>
 							<div>
 								<label
@@ -594,28 +592,28 @@ export const TokensView = ({
 								<p class="text-xs text-[color:var(--app-ink-muted)]">
 									未选择表示全开。
 								</p>
-								<Card
-									variant="compact"
-									class="mt-2 max-h-36 space-y-2 overflow-auto text-xs text-[color:var(--app-ink-muted)]"
-								>
-									{sites.length === 0 ? (
-										<p class="text-[color:var(--app-ink-muted)]">
-											暂无渠道，请先创建。
-										</p>
-									) : (
-										sites.map((site) => (
-											<label class="flex items-center gap-2" key={site.id}>
-												<input
-													class="h-3 w-3 rounded border-[color:var(--app-border)] text-[color:var(--app-ink)] focus:ring-[color:var(--app-accent-soft)]"
-													type="checkbox"
-													checked={selectedChannels.has(site.id)}
-													onChange={() => toggleChannel(site.id)}
-												/>
-												<span class="truncate">{site.name ?? site.id}</span>
-											</label>
-										))
-									)}
-								</Card>
+								{sites.length === 0 ? (
+									<Card
+										variant="compact"
+										class="mt-2 text-xs text-[color:var(--app-ink-muted)]"
+									>
+										暂无渠道，请先创建。
+									</Card>
+								) : (
+									<div class="mt-2">
+										<MultiSelect
+											class="w-full"
+											options={channelOptions}
+											value={tokenForm.allowed_channels}
+											placeholder="选择允许渠道"
+											searchPlaceholder="搜索渠道"
+											emptyLabel="暂无匹配渠道"
+											onChange={(next) =>
+												onFormChange({ allowed_channels: next })
+											}
+										/>
+									</div>
+								)}
 							</div>
 							<DialogFooter>
 								<Button size="sm" type="button" onClick={onCloseModal}>

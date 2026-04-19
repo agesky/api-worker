@@ -15,6 +15,10 @@ import {
 } from "./channel-testing";
 import type { ChannelRow } from "./channel-types";
 import {
+	collectCandidateModels,
+	mergeVerificationTokenModels,
+} from "./site-verification-selection";
+import {
 	buildUpstreamChatRequest,
 	normalizeChatRequest,
 	type ProviderType,
@@ -245,75 +249,6 @@ function buildVerificationHeaders(
 	return headers;
 }
 
-function collectCandidateModels(options: {
-	channel: ChannelRow;
-	tokens: VerificationToken[];
-	discoveredModels: string[];
-	mappedDefaultModel: string | null;
-}): { model: string | null; source: string; all: string[] } {
-	const storedVerification = extractVerificationSummary(
-		options.channel.metadata_json,
-	);
-	const candidates = new Set<string>();
-	const lastVerified = String(storedVerification?.selected_model ?? "").trim();
-	if (lastVerified) {
-		candidates.add(lastVerified);
-	}
-	if (options.mappedDefaultModel) {
-		candidates.add(options.mappedDefaultModel);
-	}
-	for (const model of options.discoveredModels) {
-		candidates.add(model);
-	}
-	for (const model of extractModelIds(options.channel)) {
-		candidates.add(model);
-	}
-	const all = Array.from(candidates);
-	const selectRoutableModel = (
-		model: string | null,
-		source: string,
-	): { model: string | null; source: string; all: string[] } | null => {
-		if (!model) {
-			return null;
-		}
-		const selection = selectTokenForModel(options.tokens, model);
-		if (!selection.token) {
-			return null;
-		}
-		return { model, source, all };
-	};
-	const lastVerifiedSelection = selectRoutableModel(
-		lastVerified,
-		"last_verified_model",
-	);
-	if (lastVerifiedSelection) {
-		return lastVerifiedSelection;
-	}
-	const mappedDefaultSelection = selectRoutableModel(
-		options.mappedDefaultModel,
-		"model_mapping_default",
-	);
-	if (mappedDefaultSelection) {
-		return mappedDefaultSelection;
-	}
-	for (const model of options.discoveredModels) {
-		const discoveredSelection = selectRoutableModel(model, "discovered_models");
-		if (discoveredSelection) {
-			return discoveredSelection;
-		}
-	}
-	for (const model of all) {
-		const configuredSelection = selectRoutableModel(model, "configured_models");
-		if (configuredSelection) {
-			return configuredSelection;
-		}
-	}
-	if (all.length > 0) {
-		return { model: null, source: "no_matching_call_token", all };
-	}
-	return { model: null, source: "missing_model", all };
-}
-
 function summarizeVerificationDetail(text: string | null): string | null {
 	if (!text) {
 		return null;
@@ -502,6 +437,7 @@ export async function verifySiteChannel(options: {
 	let selectedToken: VerificationToken | null = null;
 	let tokenSummary: SiteVerificationResult["token_summary"] = null;
 	let trace: SiteVerificationResult["trace"] = {};
+	let verifiedTokens = tokens;
 
 	if (tokens.length === 0) {
 		connectivity.status = "fail";
@@ -550,6 +486,7 @@ export async function verifySiteChannel(options: {
 			failed: summary.failed,
 		};
 		discoveredModels = summary.models;
+		verifiedTokens = mergeVerificationTokenModels(tokens, tokenResults);
 		if (summary.ok && summary.models.length > 0) {
 			capability.status = "pass";
 			capability.code = "models_discovered";
@@ -569,11 +506,13 @@ export async function verifySiteChannel(options: {
 
 	const mappedDefaultModel =
 		String(metadata.model_mapping["*"] ?? "").trim() || null;
+	const storedVerification = extractVerificationSummary(channel.metadata_json);
 	const modelSelection = collectCandidateModels({
 		channel,
-		tokens,
+		tokens: verifiedTokens,
 		discoveredModels,
 		mappedDefaultModel,
+		lastVerifiedModel: String(storedVerification?.selected_model ?? "").trim(),
 	});
 	selectedModel = modelSelection.model;
 	if (!selectedModel) {
@@ -642,7 +581,12 @@ export async function verifySiteChannel(options: {
 				: `${capability.message} 当前选择模型 ${selectedModel}。`;
 	}
 
-	const tokenSelection = selectTokenForModel(tokens, selectedModel);
+	const tokenSelection = selectTokenForModel(
+		verifiedTokens,
+		selectedModel,
+		null,
+		Math.floor(Math.random() * Math.max(1, verifiedTokens.length)),
+	);
 	selectedToken = tokenSelection.token;
 	if (!selectedToken) {
 		connectivity.status = "fail";

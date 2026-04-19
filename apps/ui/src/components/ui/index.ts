@@ -31,6 +31,7 @@ export { Pagination } from "./pagination";
 export { Popover, PopoverContent } from "./popover";
 export { Select } from "./select";
 export { Skeleton } from "./skeleton";
+export { SingleSelect } from "./single-select";
 export { Switch } from "./switch";
 export {
 	Table,

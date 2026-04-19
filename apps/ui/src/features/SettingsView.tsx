@@ -351,6 +351,51 @@ export const SettingsView = ({
 						<div class="app-settings-row">
 							<div class="app-settings-row__main">
 								<span class="app-settings-row__label">
+									启用每日更新启用渠道
+								</span>
+								<p class="app-settings-row__hint">
+									每天按设定时间更新启用渠道模型列表，并刷新渠道状态报告
+								</p>
+							</div>
+							<div class="app-settings-row__switch">
+								<Switch
+									checked={settingsForm.channel_refresh_enabled}
+									onToggle={(next) => {
+										onFormChange({ channel_refresh_enabled: next });
+									}}
+								/>
+							</div>
+						</div>
+						<div class="app-settings-row">
+							<div class="app-settings-row__main">
+								<label
+									class="app-settings-row__label"
+									for="channel-refresh-schedule-time"
+								>
+									更新时间（中国时间）
+								</label>
+								<p class="app-settings-row__hint">
+									每天自动执行“更新启用渠道”的时间
+								</p>
+							</div>
+							<Input
+								class="app-settings-row__control"
+								id="channel-refresh-schedule-time"
+								name="channel_refresh_schedule_time"
+								type="time"
+								disabled={!settingsForm.channel_refresh_enabled}
+								value={settingsForm.channel_refresh_schedule_time}
+								onInput={(event) => {
+									const target = event.currentTarget as HTMLInputElement | null;
+									onFormChange({
+										channel_refresh_schedule_time: target?.value ?? "",
+									});
+								}}
+							/>
+						</div>
+						<div class="app-settings-row">
+							<div class="app-settings-row__main">
+								<span class="app-settings-row__label">
 									启用停用渠道自动恢复检查
 								</span>
 								<p class="app-settings-row__hint">
