@@ -24,8 +24,6 @@ export type SiteSortState = {
 	direction: SiteSortDirection;
 };
 
-export type SiteCooldownFilter = "all" | "cooling";
-
 export const SITE_TYPE_LABELS: Record<Site["site_type"], string> = {
 	"new-api": "New API",
 	"done-hub": "Done Hub",
@@ -210,16 +208,6 @@ export const filterSites = (sites: Site[], query: string) => {
 		const url = String(site.base_url ?? "").toLowerCase();
 		return name.includes(keyword) || url.includes(keyword);
 	});
-};
-
-export const filterSitesByCooldown = (
-	sites: Site[],
-	filter: SiteCooldownFilter,
-) => {
-	if (filter !== "cooling") {
-		return sites;
-	}
-	return sites.filter((site) => getSiteCoolingModelCount(site) > 0);
 };
 
 const toSortableText = (value: string) => value.trim().toLowerCase();

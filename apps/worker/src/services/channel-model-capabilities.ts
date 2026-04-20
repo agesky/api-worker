@@ -44,6 +44,8 @@ type RecordChannelDisableOptions = {
 	disableThreshold: number;
 };
 
+const MAX_SQL_BINDINGS = 90;
+
 export type RecordChannelDisableResult = {
 	channelTempDisabled: boolean;
 	channelDisabled: boolean;
@@ -86,6 +88,14 @@ function toSafeInt(value: unknown): number {
 		return 0;
 	}
 	return Math.max(0, Math.floor(parsed));
+}
+
+function chunkStrings(items: string[], size: number): string[][] {
+	const chunks: string[][] = [];
+	for (let index = 0; index < items.length; index += size) {
+		chunks.push(items.slice(index, index + size));
+	}
+	return chunks;
 }
 
 function isCoolingDown(
@@ -132,14 +142,18 @@ export async function listVerifiedModelsByChannel(
 	if (channelIds.length === 0) {
 		return new Map();
 	}
-	const placeholders = channelIds.map(() => "?").join(", ");
-	const rows = await db
-		.prepare(
-			`SELECT channel_id, model, last_ok_at FROM channel_model_capabilities WHERE channel_id IN (${placeholders}) AND last_ok_at > 0`,
-		)
-		.bind(...channelIds)
-		.all<CapabilityRow>();
-	return buildCapabilityMap(rows.results ?? []);
+	const rows: CapabilityRow[] = [];
+	for (const chunk of chunkStrings(channelIds, MAX_SQL_BINDINGS)) {
+		const placeholders = chunk.map(() => "?").join(", ");
+		const result = await db
+			.prepare(
+				`SELECT channel_id, model, last_ok_at FROM channel_model_capabilities WHERE channel_id IN (${placeholders}) AND last_ok_at > 0`,
+			)
+			.bind(...chunk)
+			.all<CapabilityRow>();
+		rows.push(...(result.results ?? []));
+	}
+	return buildCapabilityMap(rows);
 }
 
 export async function listVerifiedModelEntries(
@@ -217,20 +231,29 @@ export async function listCoolingDownChannelsForModel(
 	}
 	const now = Math.floor(Date.now() / 1000);
 	const cutoff = now - cooldownSeconds;
-	const placeholders = channelIds.map(() => "?").join(", ");
-	const rows = await db
-		.prepare(
-			`SELECT channel_id, last_err_at, last_ok_at, last_err_count FROM channel_model_capabilities WHERE model = ? AND channel_id IN (${placeholders}) AND last_err_at IS NOT NULL AND last_err_at >= ?`,
-		)
-		.bind(model, ...channelIds, cutoff)
-		.all<{
-			channel_id: string;
-			last_err_at: number | null;
-			last_ok_at: number | null;
-			last_err_count?: number | null;
-		}>();
+	const rows: Array<{
+		channel_id: string;
+		last_err_at: number | null;
+		last_ok_at: number | null;
+		last_err_count?: number | null;
+	}> = [];
+	for (const chunk of chunkStrings(channelIds, MAX_SQL_BINDINGS - 2)) {
+		const placeholders = chunk.map(() => "?").join(", ");
+		const result = await db
+			.prepare(
+				`SELECT channel_id, last_err_at, last_ok_at, last_err_count FROM channel_model_capabilities WHERE model = ? AND channel_id IN (${placeholders}) AND last_err_at IS NOT NULL AND last_err_at >= ?`,
+			)
+			.bind(model, ...chunk, cutoff)
+			.all<{
+				channel_id: string;
+				last_err_at: number | null;
+				last_ok_at: number | null;
+				last_err_count?: number | null;
+			}>();
+		rows.push(...(result.results ?? []));
+	}
 	const blocked = new Set<string>();
-	for (const row of rows.results ?? []) {
+	for (const row of rows) {
 		const lastErr = Number(row.last_err_at ?? 0);
 		const lastOk = Number(row.last_ok_at ?? 0);
 		const errCount = Number(row.last_err_count ?? 0);
@@ -252,27 +275,39 @@ export async function listCoolingDownModelEntriesByChannel(
 	}
 	const now = Math.floor(Date.now() / 1000);
 	const cutoff = now - cooldownSeconds;
-	const placeholders = channelIds.map(() => "?").join(", ");
-	const rows = await db
-		.prepare(
-			`SELECT channel_id, model, last_ok_at, last_err_at, last_err_code, last_err_count, cooldown_count
-			 FROM channel_model_capabilities
-			 WHERE channel_id IN (${placeholders})
-			   AND last_err_at IS NOT NULL
-			   AND last_err_at >= ?`,
-		)
-		.bind(...channelIds, cutoff)
-		.all<{
-			channel_id: string;
-			model: string;
-			last_ok_at: number | null;
-			last_err_at: number | null;
-			last_err_code: string | null;
-			last_err_count: number | null;
-			cooldown_count: number | null;
-		}>();
+	const rows: Array<{
+		channel_id: string;
+		model: string;
+		last_ok_at: number | null;
+		last_err_at: number | null;
+		last_err_code: string | null;
+		last_err_count: number | null;
+		cooldown_count: number | null;
+	}> = [];
+	for (const chunk of chunkStrings(channelIds, MAX_SQL_BINDINGS - 1)) {
+		const placeholders = chunk.map(() => "?").join(", ");
+		const result = await db
+			.prepare(
+				`SELECT channel_id, model, last_ok_at, last_err_at, last_err_code, last_err_count, cooldown_count
+				 FROM channel_model_capabilities
+				 WHERE channel_id IN (${placeholders})
+				   AND last_err_at IS NOT NULL
+				   AND last_err_at >= ?`,
+			)
+			.bind(...chunk, cutoff)
+			.all<{
+				channel_id: string;
+				model: string;
+				last_ok_at: number | null;
+				last_err_at: number | null;
+				last_err_code: string | null;
+				last_err_count: number | null;
+				cooldown_count: number | null;
+			}>();
+		rows.push(...(result.results ?? []));
+	}
 	const grouped = new Map<string, ChannelModelCooldownSummary[]>();
-	for (const row of rows.results ?? []) {
+	for (const row of rows) {
 		const lastErrAt = toSafeInt(row.last_err_at);
 		const lastOkAt = toSafeInt(row.last_ok_at);
 		const lastErrCount = toSafeInt(row.last_err_count);
@@ -546,16 +581,30 @@ export async function upsertChannelModelCapabilities(
 	const statements = models.map((model) =>
 		stmt.bind(channelId, model, nowSeconds, timestamp, timestamp),
 	);
-	await db.batch(statements);
+	for (let index = 0; index < statements.length; index += MAX_SQL_BINDINGS) {
+		await db.batch(statements.slice(index, index + MAX_SQL_BINDINGS));
+	}
 
 	// Clean up stale models that are no longer supported by the upstream channel
-	const placeholders = models.map(() => "?").join(", ");
-	await db
+	const existingRows = await db
 		.prepare(
-			`DELETE FROM channel_model_capabilities WHERE channel_id = ? AND model NOT IN (${placeholders})`,
+			"SELECT model FROM channel_model_capabilities WHERE channel_id = ?",
 		)
-		.bind(channelId, ...models)
-		.run();
+		.bind(channelId)
+		.all<{ model: string }>();
+	const nextModelSet = new Set(models);
+	const staleModels = (existingRows.results ?? [])
+		.map((row) => row.model)
+		.filter((model) => !nextModelSet.has(model));
+	for (const chunk of chunkStrings(staleModels, MAX_SQL_BINDINGS - 1)) {
+		const placeholders = chunk.map(() => "?").join(", ");
+		await db
+			.prepare(
+				`DELETE FROM channel_model_capabilities WHERE channel_id = ? AND model IN (${placeholders})`,
+			)
+			.bind(channelId, ...chunk)
+			.run();
+	}
 
 	await db
 		.prepare(

@@ -27,7 +27,6 @@ import {
 	getVerificationSeverityLabel,
 	getVerificationSeverityRank,
 	getVerificationVerdictLabel,
-	type SiteCooldownFilter,
 	type SiteSortKey,
 	type SiteSortState,
 } from "../core/sites";
@@ -48,7 +47,7 @@ import {
 	persistColumnPrefs,
 } from "../core/utils";
 
-type SitesViewProps = {
+type ChannelsViewProps = {
 	sites: Site[];
 	siteForm: SiteForm;
 	sitePage: number;
@@ -60,7 +59,6 @@ type SitesViewProps = {
 	isSiteModalOpen: boolean;
 	taskReports: SiteTaskReportMap;
 	siteSearch: string;
-	siteCooldownFilter: SiteCooldownFilter;
 	siteSort: SiteSortState;
 	isActionPending: (key: string) => boolean;
 	onCreate: () => void;
@@ -75,7 +73,6 @@ type SitesViewProps = {
 	onPageChange: (next: number) => void;
 	onPageSizeChange: (next: number) => void;
 	onSearchChange: (next: string) => void;
-	onCooldownFilterChange: (next: SiteCooldownFilter) => void;
 	onSortChange: (next: SiteSortState) => void;
 	onFormChange: (patch: Partial<SiteForm>) => void;
 	onRunAll: () => void;
@@ -100,10 +97,6 @@ const siteStatusOptions = [
 	{ value: "active", label: getSiteStatusLabel("active") },
 	{ value: "disabled", label: getSiteStatusLabel("disabled") },
 ];
-const cooldownFilterOptions = [
-	{ value: "all", label: "全部站点" },
-	{ value: "cooling", label: "仅冷却中" },
-] as const;
 const sortableColumns: Array<{ key: SiteSortKey; label: string }> = [
 	{ key: "name", label: "站点" },
 	{ key: "type", label: "类型" },
@@ -233,6 +226,36 @@ const normalizeCallTokenOrder = (tokens: SiteForm["call_tokens"]) =>
 		priority: index,
 	}));
 
+const createDraftCallTokenId = () => {
+	callTokenDraftKeySeed += 1;
+	return `draft-call-token-${callTokenDraftKeySeed}`;
+};
+
+const ensureCallTokenClientIds = (
+	tokens: SiteForm["call_tokens"] | null | undefined,
+	previousTokens: SiteForm["call_tokens"] = [],
+) =>
+	(tokens ?? []).map((token, index) => {
+		const persistedId = String(token.id ?? "").trim();
+		if (persistedId) {
+			return {
+				...token,
+				id: persistedId,
+			};
+		}
+		const previousId = String(previousTokens[index]?.id ?? "").trim();
+		if (previousId) {
+			return {
+				...token,
+				id: previousId,
+			};
+		}
+		return {
+			...token,
+			id: createDraftCallTokenId(),
+		};
+	});
+
 const getCallTokenDragKey = (
 	token: SiteForm["call_tokens"][number],
 	fallbackIndex: number,
@@ -332,7 +355,7 @@ type CallTokenOverlayVisual = {
 	y: number;
 };
 
-export const SitesView = ({
+export const ChannelsView = ({
 	sites,
 	siteForm,
 	sitePage,
@@ -344,7 +367,6 @@ export const SitesView = ({
 	isSiteModalOpen,
 	taskReports,
 	siteSearch,
-	siteCooldownFilter,
 	siteSort,
 	isActionPending,
 	onCreate,
@@ -359,7 +381,6 @@ export const SitesView = ({
 	onPageChange,
 	onPageSizeChange,
 	onSearchChange,
-	onCooldownFilterChange,
 	onSortChange,
 	onFormChange,
 	onRunAll,
@@ -369,7 +390,7 @@ export const SitesView = ({
 	onDisableFailedSite,
 	onDisableAllFailedSites,
 	onClearCoolingModel,
-}: SitesViewProps) => {
+}: ChannelsViewProps) => {
 	const isEditing = Boolean(editingSite);
 	const pageItems = buildPageItems(sitePage, siteTotalPages);
 	const today = getBeijingDateString();
@@ -381,9 +402,10 @@ export const SitesView = ({
 	const [localSearch, setLocalSearch] = useState(siteSearch);
 	const [draftCallTokens, setDraftCallTokens] = useState<
 		SiteForm["call_tokens"]
-	>(() => siteForm.call_tokens);
+	>(() => ensureCallTokenClientIds(siteForm.call_tokens));
 	const [activeCallTokenDrag, setActiveCallTokenDrag] =
 		useState<ActiveCallTokenDrag | null>(null);
+	const draftCallTokensRef = useRef<SiteForm["call_tokens"]>(draftCallTokens);
 	const callTokenCardRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 	const activeCallTokenDragRef = useRef<ActiveCallTokenDrag | null>(null);
 	const callTokenOverlayRef = useRef<HTMLDivElement | null>(null);
@@ -475,13 +497,19 @@ export const SitesView = ({
 	const draggingCallTokenKey = activeCallTokenDrag?.tokenKey ?? null;
 	const isDraggingCallToken = draggingCallTokenKey !== null;
 	const syncCallTokensToForm = (tokens: SiteForm["call_tokens"]) => {
-		onFormChange({ call_tokens: normalizeCallTokenOrder(tokens) });
+		onFormChange({
+			call_tokens: normalizeCallTokenOrder(
+				ensureCallTokenClientIds(tokens, draftCallTokensRef.current ?? []),
+			),
+		});
 	};
 	const commitCallTokenOrder = (
 		tokens: SiteForm["call_tokens"],
 		options?: { syncForm?: boolean },
 	) => {
-		const normalizedTokens = normalizeCallTokenOrder(tokens);
+		const normalizedTokens = normalizeCallTokenOrder(
+			ensureCallTokenClientIds(tokens, draftCallTokensRef.current ?? []),
+		);
 		setDraftCallTokens(normalizedTokens);
 		if (options?.syncForm !== false) {
 			syncCallTokensToForm(normalizedTokens);
@@ -921,14 +949,36 @@ export const SitesView = ({
 		return () => window.clearTimeout(timer);
 	}, [localSearch, onSearchChange, siteSearch]);
 	useEffect(() => {
+		draftCallTokensRef.current = draftCallTokens;
+	}, [draftCallTokens]);
+	useEffect(() => {
 		if (isDraggingCallToken) {
 			return;
 		}
-		if (draftCallTokens === siteForm.call_tokens) {
+		const normalizedIncomingTokens = normalizeCallTokenOrder(
+			ensureCallTokenClientIds(
+				siteForm.call_tokens,
+				draftCallTokensRef.current ?? [],
+			),
+		);
+		const currentTokens = draftCallTokensRef.current ?? [];
+		const isSame =
+			currentTokens.length === normalizedIncomingTokens.length &&
+			currentTokens.every((token, index) => {
+				const nextToken = normalizedIncomingTokens[index];
+				return (
+					token.id === nextToken?.id &&
+					token.name === nextToken?.name &&
+					token.api_key === nextToken?.api_key &&
+					Number(token.priority ?? index) ===
+						Number(nextToken?.priority ?? index)
+				);
+			});
+		if (isSame) {
 			return;
 		}
-		setDraftCallTokens(siteForm.call_tokens);
-	}, [draftCallTokens, isDraggingCallToken, siteForm.call_tokens]);
+		setDraftCallTokens(normalizedIncomingTokens);
+	}, [isDraggingCallToken, siteForm.call_tokens]);
 	useEffect(() => {
 		const previousRects =
 			callTokenFlipRectsRef.current ?? new Map<string, DOMRect>();
@@ -1794,14 +1844,6 @@ export const SitesView = ({
 								}
 							/>
 						</div>
-						<SingleSelect
-							class="w-full sm:w-40"
-							options={[...cooldownFilterOptions]}
-							value={siteCooldownFilter}
-							onChange={(next) =>
-								onCooldownFilterChange(next as SiteCooldownFilter)
-							}
-						/>
 						<div class="flex flex-wrap items-center gap-2 md:hidden">
 							{sortableColumns.map((column) => (
 								<button
@@ -1822,22 +1864,16 @@ export const SitesView = ({
 					<div class="app-mobile-stack space-y-3 md:hidden">
 						{pagedSites.length === 0 ? (
 							<Card class="text-center text-sm text-[color:var(--app-ink-muted)]">
-								<p>
-									{siteCooldownFilter === "cooling"
-										? "暂无冷却中的模型-站点。"
-										: "暂无站点，请先创建。"}
-								</p>
-								{siteCooldownFilter === "cooling" ? null : (
-									<Button
-										class="mt-4 h-9 px-4 text-xs"
-										size="sm"
-										variant="primary"
-										type="button"
-										onClick={onCreate}
-									>
-										新增站点
-									</Button>
-								)}
+								<p>暂无站点，请先创建。</p>
+								<Button
+									class="mt-4 h-9 px-4 text-xs"
+									size="sm"
+									variant="primary"
+									type="button"
+									onClick={onCreate}
+								>
+									新增站点
+								</Button>
 							</Card>
 						) : (
 							pagedSites.map((site) => {
@@ -2059,22 +2095,16 @@ export const SitesView = ({
 						</div>
 						{pagedSites.length === 0 ? (
 							<div class="app-list-empty px-4 py-10 text-center text-sm text-[color:var(--app-ink-muted)]">
-								<p>
-									{siteCooldownFilter === "cooling"
-										? "暂无冷却中的模型-站点。"
-										: "暂无站点，请先创建。"}
-								</p>
-								{siteCooldownFilter === "cooling" ? null : (
-									<Button
-										class="mt-4 h-9 px-4 text-xs"
-										size="sm"
-										variant="primary"
-										type="button"
-										onClick={onCreate}
-									>
-										新增站点
-									</Button>
-								)}
+								<p>暂无站点，请先创建。</p>
+								<Button
+									class="mt-4 h-9 px-4 text-xs"
+									size="sm"
+									variant="primary"
+									type="button"
+									onClick={onCreate}
+								>
+									新增站点
+								</Button>
 							</div>
 						) : (
 							<div class="app-list-body divide-y divide-white/60">

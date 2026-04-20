@@ -28,12 +28,10 @@ import {
 } from "./core/constants";
 import {
 	filterSites,
-	filterSitesByCooldown,
 	getSuggestedActionLabel,
 	getVerificationStageTone,
 	getVerificationVerdictLabel,
 	summarizeVerificationResults,
-	type SiteCooldownFilter,
 	type SiteSortState,
 	sortSites,
 } from "./core/sites";
@@ -75,11 +73,11 @@ import {
 	toggleStatus,
 } from "./core/utils";
 import { AppLayout } from "./features/AppLayout";
+import { ChannelsView } from "./features/ChannelsView";
 import { DashboardView } from "./features/DashboardView";
 import { LoginView } from "./features/LoginView";
 import { ModelsView } from "./features/ModelsView";
 import { SettingsView } from "./features/SettingsView";
-import { SitesView } from "./features/SitesView";
 import { TokensView } from "./features/TokensView";
 import { UsageView } from "./features/UsageView";
 
@@ -372,8 +370,6 @@ const App = () => {
 		loadPageSizePref("pageSize:sites", 10),
 	);
 	const [siteSearch, setSiteSearch] = useState("");
-	const [siteCooldownFilter, setSiteCooldownFilter] =
-		useState<SiteCooldownFilter>("all");
 	const [siteSort, setSiteSort] = useState<SiteSortState>({
 		key: "name",
 		direction: "asc",
@@ -987,13 +983,6 @@ const App = () => {
 	const handleSiteSearchChange = useCallback((next: string) => {
 		setSiteSearch(next);
 	}, []);
-
-	const handleSiteCooldownFilterChange = useCallback(
-		(next: SiteCooldownFilter) => {
-			setSiteCooldownFilter(next);
-		},
-		[],
-	);
 
 	const handleSiteSortChange = useCallback((next: SiteSortState) => {
 		setSiteSort(next);
@@ -2575,12 +2564,8 @@ const App = () => {
 	}, [endAction, isActionPending, loadUsage, pushNotice, startAction]);
 
 	const filteredSites = useMemo(
-		() =>
-			filterSitesByCooldown(
-				filterSites(data.sites, siteSearch),
-				siteCooldownFilter,
-			),
-		[data.sites, siteCooldownFilter, siteSearch],
+		() => filterSites(data.sites, siteSearch),
+		[data.sites, siteSearch],
 	);
 	const sortedSites = useMemo(
 		() => sortSites(filteredSites, siteSort),
@@ -2615,7 +2600,7 @@ const App = () => {
 
 	useEffect(() => {
 		setSitePage(1);
-	}, [siteCooldownFilter, siteSearch, siteSort.key, siteSort.direction]);
+	}, [siteSearch, siteSort.key, siteSort.direction]);
 
 	useEffect(() => {
 		setTokenPage((prev) => Math.min(prev, tokenTotalPages));
@@ -2679,7 +2664,7 @@ const App = () => {
 		}
 		if (activeTab === "channels") {
 			return (
-				<SitesView
+				<ChannelsView
 					sites={data.sites}
 					siteForm={siteForm}
 					sitePage={sitePage}
@@ -2691,7 +2676,6 @@ const App = () => {
 					isSiteModalOpen={isSiteModalOpen}
 					taskReports={siteTaskReports}
 					siteSearch={siteSearch}
-					siteCooldownFilter={siteCooldownFilter}
 					siteSort={siteSort}
 					isActionPending={isActionPending}
 					onCreate={openSiteCreate}
@@ -2706,7 +2690,6 @@ const App = () => {
 					onPageChange={handleSitePageChange}
 					onPageSizeChange={handleSitePageSizeChange}
 					onSearchChange={handleSiteSearchChange}
-					onCooldownFilterChange={handleSiteCooldownFilterChange}
 					onSortChange={handleSiteSortChange}
 					onFormChange={handleSiteFormChange}
 					onRunAll={handleCheckinRunAll}

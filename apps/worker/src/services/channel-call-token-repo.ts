@@ -5,15 +5,14 @@ type ChannelCallTokenFilters = {
 	channelIds?: string[] | null;
 };
 
-const buildWhere = (filters?: ChannelCallTokenFilters) => {
-	if (!filters?.channelIds || filters.channelIds.length === 0) {
-		return { whereSql: "", bindings: [] as string[] };
+const MAX_SQL_BINDINGS = 90;
+
+const chunkStrings = (items: string[], size: number) => {
+	const chunks: string[][] = [];
+	for (let index = 0; index < items.length; index += size) {
+		chunks.push(items.slice(index, index + size));
 	}
-	const placeholders = filters.channelIds.map(() => "?").join(", ");
-	return {
-		whereSql: `WHERE channel_id IN (${placeholders})`,
-		bindings: filters.channelIds,
-	};
+	return chunks;
 };
 
 export async function listCallTokens(
@@ -23,12 +22,51 @@ export async function listCallTokens(
 	if (filters?.channelIds && filters.channelIds.length === 0) {
 		return [];
 	}
-	const { whereSql, bindings } = buildWhere(filters);
-	const statement = db.prepare(
-		`SELECT * FROM channel_call_tokens ${whereSql} ORDER BY channel_id ASC, priority ASC, created_at ASC, id ASC`,
-	);
-	const rows = await statement.bind(...bindings).all<ChannelCallTokenRow>();
-	return rows.results ?? [];
+	if (!filters?.channelIds || filters.channelIds.length <= MAX_SQL_BINDINGS) {
+		const bindings = filters?.channelIds ?? [];
+		const whereSql =
+			bindings.length > 0
+				? `WHERE channel_id IN (${bindings.map(() => "?").join(", ")})`
+				: "";
+		const rows = await db
+			.prepare(
+				`SELECT * FROM channel_call_tokens ${whereSql} ORDER BY channel_id ASC, priority ASC, created_at ASC, id ASC`,
+			)
+			.bind(...bindings)
+			.all<ChannelCallTokenRow>();
+		return rows.results ?? [];
+	}
+	const merged: ChannelCallTokenRow[] = [];
+	for (const chunk of chunkStrings(filters.channelIds, MAX_SQL_BINDINGS)) {
+		const placeholders = chunk.map(() => "?").join(", ");
+		const rows = await db
+			.prepare(
+				`SELECT * FROM channel_call_tokens WHERE channel_id IN (${placeholders}) ORDER BY channel_id ASC, priority ASC, created_at ASC, id ASC`,
+			)
+			.bind(...chunk)
+			.all<ChannelCallTokenRow>();
+		merged.push(...(rows.results ?? []));
+	}
+	return merged.sort((left, right) => {
+		const channelDiff = String(left.channel_id ?? "").localeCompare(
+			String(right.channel_id ?? ""),
+		);
+		if (channelDiff !== 0) {
+			return channelDiff;
+		}
+		const priorityDiff =
+			Number(left.priority ?? 0) - Number(right.priority ?? 0);
+		if (priorityDiff !== 0) {
+			return priorityDiff;
+		}
+		const createdAtDiff = String(left.created_at ?? "").localeCompare(
+			String(right.created_at ?? ""),
+		);
+		if (createdAtDiff !== 0) {
+			return createdAtDiff;
+		}
+		return String(left.id ?? "").localeCompare(String(right.id ?? ""));
+	});
 }
 
 export async function deleteCallTokensByChannelId(
