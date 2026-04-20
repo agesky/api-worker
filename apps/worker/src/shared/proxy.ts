@@ -22,13 +22,17 @@ import {
 	tokenAuth,
 } from "../../../worker/src/middleware/tokenAuth";
 import type { CallTokenItem } from "../../../worker/src/services/call-token-selector";
-import { resolveChannelAttemptTarget, type CallTokenSelection } from "../../../worker/src/services/channel-attemptability";
+import {
+	resolveChannelAttemptTarget,
+	type CallTokenSelection,
+} from "../../../worker/src/services/channel-attemptability";
 import { listCallTokens } from "../../../worker/src/services/channel-call-token-repo";
 import {
 	listCoolingDownChannelsForModel,
 	listVerifiedModelsByChannel,
 	recordChannelDisableHit,
 } from "../../../worker/src/services/channel-model-capabilities";
+import { listActiveChannels } from "../../../worker/src/services/channel-repo";
 import {
 	type ChannelRecord,
 	createWeightedOrder,
@@ -50,6 +54,7 @@ import {
 	resolveProxyErrorDecision,
 	type ProxyErrorAction,
 } from "../../../worker/src/services/proxy-error-policy";
+import { listOpenAiModelsForChannels } from "../../../worker/src/services/openai-model-list";
 import {
 	getSuccessfulUsageWarning,
 	shouldValidateToolSchemasFromRequestText,
@@ -2005,6 +2010,10 @@ function normalizeIncomingRequestPath(path: string): {
 	};
 }
 
+function isOpenAiModelsListRequest(method: string, path: string): boolean {
+	return method.toUpperCase() === "GET" && path.toLowerCase() === "/v1/models";
+}
+
 function mergeQuery(
 	base: string,
 	querySuffix: string,
@@ -2718,6 +2727,13 @@ proxy.all("/*", tokenAuth, async (c) => {
 				},
 			),
 		);
+	const requestPath = normalizeIncomingRequestPath(c.req.path).path;
+	if (isOpenAiModelsListRequest(c.req.method, c.req.path)) {
+		const activeChannels = await listActiveChannels(db);
+		const allowedChannels = filterAllowedChannels(activeChannels, tokenRecord);
+		const payload = await listOpenAiModelsForChannels(db, allowedChannels);
+		return withTraceHeader(c.json(payload));
+	}
 	const runtimeSettings = await getProxyRuntimeSettings(db);
 	const retrySleepMs = Math.max(
 		0,
@@ -2753,7 +2769,6 @@ proxy.all("/*", tokenAuth, async (c) => {
 		normalizeAttemptWorkerBaseUrl(c.env.LOCAL_ATTEMPT_WORKER_URL) ??
 			c.env.ATTEMPT_WORKER,
 	);
-	const requestPath = normalizeIncomingRequestPath(c.req.path).path;
 	let downstreamProvider: ProviderType;
 	let endpointType: EndpointType;
 	try {
@@ -4463,7 +4478,8 @@ proxy.all("/*", tokenAuth, async (c) => {
 								selectedParsedStreamUsage = parsedSuccessStreamUsage;
 								selectedHasUsageHeaders = hasUsageHeaderSignal;
 								selectedAttemptTokenId = meta.tokenSelection.token?.id ?? null;
-								selectedAttemptTokenName = meta.tokenSelection.token?.name ?? null;
+								selectedAttemptTokenName =
+									meta.tokenSelection.token?.name ?? null;
 								selectedAttemptIndex = attemptNumber;
 								selectedAttemptStartedAt = meta.attemptStartedAt;
 								selectedAttemptLatencyMs = attemptLatencyMs;

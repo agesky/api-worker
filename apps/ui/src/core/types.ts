@@ -157,6 +157,8 @@ export type UsageLog = {
 	channel_name?: string | null;
 	token_id: string | null;
 	token_name?: string | null;
+	call_token_id?: string | null;
+	call_token_name?: string | null;
 	total_tokens: number | null;
 	prompt_tokens?: number | null;
 	completion_tokens?: number | null;

@@ -370,7 +370,8 @@ bun run dev -- --remote-d1
 
 ### OpenAI 兼容代理
 
-- `ALL /v1/*`
+- `GET /v1/models`：返回本站 active 渠道聚合出的 OpenAI 兼容模型列表，不请求上游；会按调用令牌的 `allowed_channels` 过滤可见模型
+- `ALL /v1/*`：除 `GET /v1/models` 外，其余请求继续走多上游代理
 - `ALL /v1beta/*`
 
 鉴权与细节请以 `apps/worker/src/middleware/*` 与对应 route 实现为准。

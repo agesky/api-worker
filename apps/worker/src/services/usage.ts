@@ -22,6 +22,8 @@ export type UsageInput = {
 	failureReason?: string | null;
 	usageSource?: string | null;
 	errorMetaJson?: string | null;
+	callTokenId?: string | null;
+	callTokenName?: string | null;
 };
 
 const PRUNE_INTERVAL_MS = 60 * 60 * 1000;
@@ -51,7 +53,7 @@ export async function recordUsage(
 			: String(input.reasoningEffort);
 	await db
 		.prepare(
-			"INSERT INTO usage_logs (id, token_id, channel_id, model, request_path, total_tokens, prompt_tokens, completion_tokens, cost, latency_ms, first_token_latency_ms, stream, reasoning_effort, status, upstream_status, error_code, error_message, failure_stage, failure_reason, usage_source, error_meta_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			"INSERT INTO usage_logs (id, token_id, channel_id, model, request_path, total_tokens, prompt_tokens, completion_tokens, cost, latency_ms, first_token_latency_ms, stream, reasoning_effort, status, upstream_status, error_code, error_message, failure_stage, failure_reason, usage_source, error_meta_json, call_token_id, call_token_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		)
 		.bind(
 			id,
@@ -75,6 +77,8 @@ export async function recordUsage(
 			input.failureReason ?? null,
 			input.usageSource ?? null,
 			input.errorMetaJson ?? null,
+			input.callTokenId ?? null,
+			input.callTokenName ?? null,
 			createdAt,
 		)
 		.run();

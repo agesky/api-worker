@@ -78,6 +78,8 @@ CREATE TABLE IF NOT EXISTS usage_logs (
   failure_reason TEXT,
   usage_source TEXT,
   error_meta_json TEXT,
+  call_token_id TEXT,
+  call_token_name TEXT,
   created_at TEXT NOT NULL
 );
 

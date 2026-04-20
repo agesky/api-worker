@@ -279,6 +279,8 @@ export const UsageView = ({
 		errorMetaRecord,
 		"policy_lookup_keys",
 	);
+	const callTokenLabel =
+		activeErrorLog?.call_token_name ?? activeErrorLog?.call_token_id ?? "-";
 
 	useEffect(() => {
 		if (!activeErrorLog) {
@@ -712,6 +714,12 @@ export const UsageView = ({
 											activeErrorLog.token_id ??
 											"-"}
 									</span>
+								</div>
+								<div class="flex items-center justify-between gap-3">
+									<span class="text-[color:var(--app-ink-muted)]">
+										调用令牌
+									</span>
+									<span>{callTokenLabel}</span>
 								</div>
 								<div class="flex items-center justify-between gap-3">
 									<span class="text-[color:var(--app-ink-muted)]">耗时</span>

@@ -16,6 +16,8 @@ export type AttemptLogInput = {
 	endedAt: string;
 	rawSizeBytes: number | null;
 	rawHash: string | null;
+	callTokenId?: string | null;
+	callTokenName?: string | null;
 	createdAt?: string | null;
 };
 
