@@ -12,6 +12,19 @@ const HOP_BY_HOP_REQUEST_HEADERS = [
 	"http2-settings",
 ];
 
+const PROXY_CHAIN_REQUEST_HEADERS = [
+	"cf-connecting-ip",
+	"forwarded",
+	"true-client-ip",
+	"via",
+	"x-client-ip",
+	"x-forwarded-for",
+	"x-forwarded-host",
+	"x-forwarded-port",
+	"x-forwarded-proto",
+	"x-real-ip",
+];
+
 function parseConnectionHeaderTokens(value: string | null): string[] {
 	if (!value) {
 		return [];
@@ -34,6 +47,9 @@ export function sanitizeUpstreamRequestHeaders(baseHeaders: Headers): Headers {
 		headers.delete(headerName);
 	}
 	for (const headerName of connectionTokens) {
+		headers.delete(headerName);
+	}
+	for (const headerName of PROXY_CHAIN_REQUEST_HEADERS) {
 		headers.delete(headerName);
 	}
 	return headers;
