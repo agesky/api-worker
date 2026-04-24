@@ -1,15 +1,13 @@
 import type { D1Database } from "@cloudflare/workers-types";
+import type { ProviderType } from "./channel-metadata";
 import { nowIso } from "../utils/time";
-import { normalizeBaseUrl } from "../utils/url";
-import { modelsToJson, normalizeModelsInput } from "./channel-models";
 import { upsertChannelModelCapabilities } from "./channel-model-capabilities";
+import { modelsToJson } from "./channel-models";
+import type { ModelDiscoveryResult } from "./providers";
+import type { SiteType } from "./site-metadata";
+import { discoverUpstreamModels } from "./upstreams";
 
-export type ChannelTestResult = {
-	ok: boolean;
-	elapsed: number;
-	models: string[];
-	payload?: unknown[] | { data?: unknown[] };
-};
+export type ChannelTestResult = ModelDiscoveryResult;
 
 export type ChannelToken = {
 	id?: string;
@@ -35,33 +33,34 @@ export type ChannelTokenTestSummary = {
 	items: ChannelTokenTestItem[];
 };
 
+export type FetchChannelModelsOptions = {
+	provider?: ProviderType;
+	siteType?: SiteType;
+	fetcher?: typeof fetch;
+};
+
+export type ChannelModelsFetcher = (
+	baseUrl: string,
+	apiKey: string,
+	options?: FetchChannelModelsOptions,
+) => Promise<ChannelTestResult>;
+
+export type ChannelTokenTestOptions = FetchChannelModelsOptions & {
+	fetcher?: ChannelModelsFetcher;
+};
+
 export async function fetchChannelModels(
 	baseUrl: string,
 	apiKey: string,
+	options: FetchChannelModelsOptions = {},
 ): Promise<ChannelTestResult> {
-	const target = `${normalizeBaseUrl(baseUrl)}/v1/models`;
-	const start = Date.now();
-	const response = await fetch(target, {
-		method: "GET",
-		headers: {
-			Authorization: `Bearer ${apiKey}`,
-			"x-api-key": apiKey,
-			"Content-Type": "application/json",
-		},
+	return discoverUpstreamModels({
+		siteType: options.siteType ?? options.provider ?? "new-api",
+		baseUrl,
+		apiKey,
+		provider: options.provider,
+		fetcher: options.fetcher,
 	});
-
-	const elapsed = Date.now() - start;
-	if (!response.ok) {
-		return { ok: false, elapsed, models: [] };
-	}
-
-	const payload = (await response.json().catch(() => ({ data: [] }))) as
-		| { data?: unknown[] }
-		| unknown[];
-	const models = normalizeModelsInput(
-		Array.isArray(payload) ? payload : (payload.data ?? payload),
-	);
-	return { ok: true, elapsed, models, payload };
 }
 
 /**
@@ -78,10 +77,10 @@ export async function fetchChannelModels(
 export async function testChannelTokens(
 	baseUrl: string,
 	tokens: ChannelToken[],
-	fetcher: (
-		baseUrl: string,
-		apiKey: string,
-	) => Promise<ChannelTestResult> = fetchChannelModels,
+	fetcherOrOptions:
+		| ChannelModelsFetcher
+		| ChannelTokenTestOptions = fetchChannelModels,
+	maybeOptions: ChannelTokenTestOptions = {},
 ): Promise<ChannelTokenTestSummary> {
 	if (tokens.length === 0) {
 		return {
@@ -95,13 +94,31 @@ export async function testChannelTokens(
 		};
 	}
 
+	const fetcher =
+		typeof fetcherOrOptions === "function"
+			? fetcherOrOptions
+			: (fetcherOrOptions.fetcher ?? fetchChannelModels);
+	const provider =
+		typeof fetcherOrOptions === "function"
+			? maybeOptions.provider
+			: fetcherOrOptions.provider;
+	const siteType =
+		typeof fetcherOrOptions === "function"
+			? maybeOptions.siteType
+			: fetcherOrOptions.siteType;
+	const fetcherOptions =
+		typeof fetcherOrOptions === "function" ? maybeOptions : fetcherOrOptions;
 	const items: ChannelTokenTestItem[] = [];
 	const modelSet = new Set<string>();
 	let success = 0;
 	let totalElapsed = 0;
 
 	for (const token of tokens) {
-		const result = await fetcher(baseUrl, token.api_key);
+		const result = await fetcher(baseUrl, token.api_key, {
+			provider,
+			siteType,
+			fetcher: fetcherOptions.fetcher,
+		});
 		totalElapsed += result.elapsed;
 		if (result.ok) {
 			success += 1;

@@ -4,6 +4,7 @@ import {
 	parseSiteMetadata,
 	type SiteType,
 } from "./site-metadata";
+import { resolveUpstreamProvider } from "./upstreams";
 
 export type ProviderType = "openai" | "anthropic" | "gemini";
 
@@ -65,13 +66,7 @@ export function parseChannelMetadata(
 }
 
 export function resolveProvider(siteType: SiteType): ProviderType {
-	if (siteType === "anthropic") {
-		return "anthropic";
-	}
-	if (siteType === "gemini") {
-		return "gemini";
-	}
-	return "openai";
+	return resolveUpstreamProvider(siteType);
 }
 
 export function resolveMappedModel(

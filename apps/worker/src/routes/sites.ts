@@ -1,9 +1,19 @@
 import { Hono } from "hono";
+import {
+	getDefaultBaseUrlForSiteType,
+	normalizeSiteType,
+	supportsSiteCheckin,
+	type SiteType,
+} from "../../../shared-core/src";
 import type { AppEnv } from "../env";
 import {
 	listCallTokens,
 	replaceCallTokensForChannel,
 } from "../services/channel-call-token-repo";
+import {
+	clearChannelModelCooldown,
+	listCoolingDownModelEntriesByChannel,
+} from "../services/channel-model-capabilities";
 import {
 	deleteChannel,
 	getChannelById,
@@ -11,16 +21,39 @@ import {
 	listChannels,
 	updateChannel,
 } from "../services/channel-repo";
-import { runCheckinAll } from "../services/checkin-runner";
+import { invalidateSelectionHotCache } from "../services/hot-kv";
 import {
 	buildSiteMetadata,
 	parseSiteMetadata,
-	type SiteType,
 } from "../services/site-metadata";
+import {
+	recoverDisabledChannelsViaWorker,
+	refreshActiveChannelsViaWorker,
+	refreshChannelById,
+	runCheckinAllViaWorker,
+	runCheckinSingleViaWorker,
+	verifyChannelById,
+	verifySitesByIds,
+} from "../services/site-task-dispatcher";
+import { triggerBackupAfterDataChange } from "../services/backup-auto-sync";
 import { generateToken } from "../utils/crypto";
 import { jsonError } from "../utils/http";
 import { nowIso } from "../utils/time";
 import { normalizeBaseUrl } from "../utils/url";
+import {
+	buildVerificationBatchResult,
+	parseSiteVerificationSummary,
+} from "../services/site-verification";
+import {
+	normalizeCallTokens,
+	type NormalizedSiteCallToken,
+	type SiteCallTokenInput,
+} from "../services/site-call-token-order";
+import {
+	listSiteTaskReports,
+	saveSiteTaskReport,
+} from "../services/site-task-report-store";
+import { getProxyRuntimeSettings } from "../services/settings";
 
 const sites = new Hono<AppEnv>();
 
@@ -41,27 +74,12 @@ type SitePayload = {
 	checkin_status?: string;
 };
 
-type CallTokenPayload = {
+type CallTokenPayload = SiteCallTokenInput & {
 	id?: string;
-	name?: string;
-	api_key?: string;
 };
 
 const parseSiteType = (value: unknown): SiteType => {
-	if (
-		value === "done-hub" ||
-		value === "new-api" ||
-		value === "subapi" ||
-		value === "openai" ||
-		value === "anthropic" ||
-		value === "gemini"
-	) {
-		return value;
-	}
-	if (value === "custom") {
-		return "subapi";
-	}
-	return "new-api";
+	return normalizeSiteType(value);
 };
 
 const trimValue = (value: unknown): string => {
@@ -71,18 +89,12 @@ const trimValue = (value: unknown): string => {
 	return value.trim();
 };
 
-const DEFAULT_BASE_URL_BY_TYPE: Partial<Record<SiteType, string>> = {
-	openai: "https://api.openai.com",
-	anthropic: "https://api.anthropic.com",
-	gemini: "https://generativelanguage.googleapis.com",
-};
-
 const resolveBaseUrl = (siteType: SiteType, raw: unknown): string => {
 	const trimmed = trimValue(raw);
 	if (trimmed) {
 		return normalizeBaseUrl(trimmed);
 	}
-	const fallback = DEFAULT_BASE_URL_BY_TYPE[siteType];
+	const fallback = getDefaultBaseUrlForSiteType(siteType);
 	if (fallback) {
 		return normalizeBaseUrl(fallback);
 	}
@@ -99,39 +111,9 @@ const parseBoolean = (value: unknown, fallback = false): boolean => {
 	return fallback;
 };
 
-type NormalizedCallToken = {
-	name: string;
-	api_key: string;
-};
-
-const normalizeCallTokens = (
-	rawTokens: CallTokenPayload[] | undefined,
-	fallbackApiKey: string | undefined,
-): NormalizedCallToken[] => {
-	const tokens =
-		rawTokens?.map((token, index) => ({
-			name: trimValue(token.name) || `调用令牌${index + 1}`,
-			api_key: trimValue(token.api_key),
-		})) ?? [];
-	const filtered = tokens.filter((token) => token.api_key.length > 0);
-	if (filtered.length > 0) {
-		return filtered;
-	}
-	const fallback = trimValue(fallbackApiKey);
-	if (fallback) {
-		return [
-			{
-				name: "主调用令牌",
-				api_key: fallback,
-			},
-		];
-	}
-	return [];
-};
-
 const toCallTokenRows = (
 	channelId: string,
-	tokens: NormalizedCallToken[],
+	tokens: NormalizedSiteCallToken[],
 	now: string,
 ) =>
 	tokens.map((token) => ({
@@ -139,6 +121,7 @@ const toCallTokenRows = (
 		channel_id: channelId,
 		name: token.name,
 		api_key: token.api_key,
+		priority: token.priority,
 		created_at: now,
 		updated_at: now,
 	}));
@@ -167,12 +150,25 @@ const buildSiteRecord = (
 		id: string;
 		name: string;
 		api_key: string;
+		priority?: number | null;
+	}>,
+	coolingModels: Array<{
+		model: string;
+		last_err_at: number;
+		last_err_code: string | null;
+		last_err_count: number;
+		cooldown_count: number;
+		remaining_seconds: number;
 	}>,
 ) => {
 	const metadata = parseSiteMetadata(channel.metadata_json);
 	const rawEnabled = channel.checkin_enabled ?? 0;
 	const checkinEnabled =
 		typeof rawEnabled === "boolean" ? rawEnabled : Number(rawEnabled) === 1;
+	const cooldownMaxRemainingSeconds = coolingModels.reduce(
+		(max, item) => Math.max(max, Number(item.remaining_seconds ?? 0)),
+		0,
+	);
 	return {
 		id: channel.id,
 		name: channel.name,
@@ -191,6 +187,10 @@ const buildSiteRecord = (
 		last_checkin_status: channel.last_checkin_status ?? null,
 		last_checkin_message: channel.last_checkin_message ?? null,
 		last_checkin_at: channel.last_checkin_at ?? null,
+		verification: parseSiteVerificationSummary(channel.metadata_json),
+		cooling_models: coolingModels,
+		cooling_model_count: coolingModels.length,
+		cooling_max_remaining_seconds: cooldownMaxRemainingSeconds,
 		created_at: channel.created_at ?? null,
 		updated_at: channel.updated_at ?? null,
 	};
@@ -202,6 +202,14 @@ sites.get("/", async (c) => {
 		order: "DESC",
 	});
 	const channelIds = channels.map((channel) => channel.id);
+	const runtimeSettings = await getProxyRuntimeSettings(c.env.DB);
+	const coolingModelMap = await listCoolingDownModelEntriesByChannel(
+		c.env.DB,
+		channelIds,
+		Math.max(0, Math.floor(runtimeSettings.model_failure_cooldown_minutes)) *
+			60,
+		Math.max(1, Math.floor(runtimeSettings.model_failure_cooldown_threshold)),
+	);
 	const callTokenRows = await listCallTokens(c.env.DB, {
 		channelIds,
 	});
@@ -218,6 +226,7 @@ sites.get("/", async (c) => {
 			id: row.id,
 			name: row.name,
 			api_key: row.api_key,
+			priority: row.priority ?? 0,
 		};
 		const list = callTokenMap.get(row.channel_id) ?? [];
 		list.push(entry);
@@ -234,12 +243,24 @@ sites.get("/", async (c) => {
 								id: "",
 								name: "主调用令牌",
 								api_key: channel.api_key,
+								priority: 0,
 							},
 						]
 					: [];
-		return buildSiteRecord(channel, callTokens);
+		const coolingModels = (coolingModelMap.get(channel.id) ?? []).map(
+			(entry) => ({
+				model: entry.model,
+				last_err_at: entry.last_err_at,
+				last_err_code: entry.last_err_code,
+				last_err_count: entry.last_err_count,
+				cooldown_count: entry.cooldown_count,
+				remaining_seconds: entry.remaining_seconds,
+			}),
+		);
+		return buildSiteRecord(channel, callTokens, coolingModels);
 	});
-	return c.json({ sites: sitesList });
+	const taskReports = await listSiteTaskReports(c.env.DB);
+	return c.json({ sites: sitesList, task_reports: taskReports });
 });
 
 sites.post("/", async (c) => {
@@ -268,10 +289,9 @@ sites.post("/", async (c) => {
 		body.checkin_url !== undefined && body.checkin_url !== null
 			? trimValue(body.checkin_url)
 			: "";
-	const checkinEnabled =
-		siteType === "new-api"
-			? parseBoolean(body.checkin_enabled, body.checkin_status === "active")
-			: false;
+	const checkinEnabled = supportsSiteCheckin(siteType)
+		? parseBoolean(body.checkin_enabled, body.checkin_status === "active")
+		: false;
 	if (checkinEnabled && (!systemToken || !systemUser)) {
 		return jsonError(
 			c,
@@ -312,7 +332,9 @@ sites.post("/", async (c) => {
 		id,
 		toCallTokenRows(id, callTokens, now),
 	);
+	await triggerBackupAfterDataChange(c.env.DB);
 
+	await invalidateSelectionHotCache(c.env.KV_HOT);
 	return c.json({ id });
 });
 
@@ -369,12 +391,11 @@ sites.patch("/:id", async (c) => {
 		typeof current.checkin_enabled === "boolean"
 			? current.checkin_enabled
 			: Number(current.checkin_enabled ?? 0) === 1;
-	const nextCheckinEnabled =
-		nextSiteType === "new-api"
-			? body.checkin_enabled !== undefined || body.checkin_status !== undefined
-				? parseBoolean(body.checkin_enabled, body.checkin_status === "active")
-				: currentCheckinEnabled
-			: false;
+	const nextCheckinEnabled = supportsSiteCheckin(nextSiteType)
+		? body.checkin_enabled !== undefined || body.checkin_status !== undefined
+			? parseBoolean(body.checkin_enabled, body.checkin_status === "active")
+			: currentCheckinEnabled
+		: false;
 	if (nextCheckinEnabled && (!nextSystemToken || !nextSystemUser)) {
 		return jsonError(
 			c,
@@ -413,23 +434,166 @@ sites.patch("/:id", async (c) => {
 			toCallTokenRows(id, callTokens, nowIso()),
 		);
 	}
+	await triggerBackupAfterDataChange(c.env.DB);
 
+	await invalidateSelectionHotCache(c.env.KV_HOT);
 	return c.json({ ok: true });
 });
 
 sites.delete("/:id", async (c) => {
 	const id = c.req.param("id");
 	await deleteChannel(c.env.DB, id);
+	await triggerBackupAfterDataChange(c.env.DB);
+	await invalidateSelectionHotCache(c.env.KV_HOT);
 	return c.json({ ok: true });
 });
 
 sites.post("/checkin-all", async (c) => {
-	const result = await runCheckinAll(c.env.DB, new Date());
+	const result = await runCheckinAllViaWorker(c.env.DB, c.env, new Date());
+	await saveSiteTaskReport(c.env.DB, {
+		kind: "checkin",
+		runs_at: result.runsAt,
+		summary: result.summary,
+		items: result.results,
+	});
 	return c.json({
 		results: result.results,
 		summary: result.summary,
 		runs_at: result.runsAt,
 	});
+});
+
+sites.post("/:id/verify", async (c) => {
+	const id = c.req.param("id");
+	const result = await verifyChannelById(c.env.DB, id);
+	if (!result) {
+		return jsonError(c, 404, "site_not_found", "site_not_found");
+	}
+	await invalidateSelectionHotCache(c.env.KV_HOT);
+	return c.json(result);
+});
+
+sites.post("/:id/cooling-models/reset", async (c) => {
+	const id = c.req.param("id");
+	const body = (await c.req.json().catch(() => null)) as {
+		model?: string;
+	} | null;
+	const model = String(body?.model ?? "").trim();
+	if (!model) {
+		return jsonError(c, 400, "missing_model", "missing_model");
+	}
+	const current = await getChannelById(c.env.DB, id);
+	if (!current) {
+		return jsonError(c, 404, "site_not_found", "site_not_found");
+	}
+	const cleared = await clearChannelModelCooldown(c.env.DB, id, model);
+	return c.json({ ok: true, cleared });
+});
+
+sites.post("/verify-batch", async (c) => {
+	const body = await c.req.json().catch(() => null);
+	const ids = Array.isArray(body?.ids)
+		? body.ids
+				.map((item: unknown) => String(item ?? "").trim())
+				.filter((item: string) => item.length > 0)
+		: undefined;
+	const result = await verifySitesByIds(c.env.DB, ids);
+	await saveSiteTaskReport(c.env.DB, {
+		kind: "verify-active",
+		runs_at: result.runs_at,
+		report: result,
+	});
+	if (result.items.length > 0) {
+		await invalidateSelectionHotCache(c.env.KV_HOT);
+	}
+	return c.json(result);
+});
+
+sites.post("/probe-recovery", async (c) => {
+	const runsAt = new Date().toISOString();
+	const result = await recoverDisabledChannelsViaWorker(c.env.DB, c.env);
+	if (result.recovered > 0) {
+		await invalidateSelectionHotCache(c.env.KV_HOT);
+	}
+	return c.json({
+		summary: {
+			total: result.total,
+			attempted: result.attempted,
+			recovered: result.recovered,
+			failed: result.failed,
+		},
+		items: result.items,
+		runs_at: runsAt,
+	});
+});
+
+sites.post("/recovery-evaluate", async (c) => {
+	const result = await recoverDisabledChannelsViaWorker(c.env.DB, c.env);
+	if (result.recovered > 0) {
+		await invalidateSelectionHotCache(c.env.KV_HOT);
+	}
+	const verificationItems = result.items
+		.map((item) => item.verification)
+		.filter(
+			(
+				item,
+			): item is NonNullable<(typeof result.items)[number]["verification"]> =>
+				Boolean(item),
+		);
+	const report = await buildVerificationBatchResult(verificationItems);
+	await saveSiteTaskReport(c.env.DB, {
+		kind: "verify-disabled",
+		runs_at: report.runs_at,
+		report,
+	});
+	return c.json(report);
+});
+
+sites.post("/refresh-active", async (c) => {
+	const result = await refreshActiveChannelsViaWorker(c.env.DB, c.env);
+	const report = {
+		summary: result.summary,
+		items: result.items,
+		runs_at: result.runsAt,
+	};
+	await saveSiteTaskReport(c.env.DB, {
+		kind: "refresh-active",
+		runs_at: report.runs_at,
+		report,
+	});
+	if (result.summary.success > 0) {
+		await invalidateSelectionHotCache(c.env.KV_HOT);
+	}
+	return c.json(report);
+});
+
+sites.post("/:id/checkin", async (c) => {
+	const id = c.req.param("id");
+	const result = await runCheckinSingleViaWorker(
+		c.env.DB,
+		c.env,
+		id,
+		new Date(),
+	);
+	if (!result) {
+		return jsonError(c, 404, "site_not_found", "site_not_found");
+	}
+	return c.json({
+		result: result.result,
+		runs_at: result.runsAt,
+	});
+});
+
+sites.post("/:id/refresh", async (c) => {
+	const id = c.req.param("id");
+	const result = await refreshChannelById(c.env.DB, c.env, id);
+	if (!result) {
+		return jsonError(c, 404, "site_not_found", "site_not_found");
+	}
+	if (result.status === "success") {
+		await invalidateSelectionHotCache(c.env.KV_HOT);
+	}
+	return c.json(result);
 });
 
 export default sites;

@@ -38,10 +38,18 @@ type PayloadSummary = {
 	error?: unknown;
 };
 
+const CHECKIN_PATH_PATTERN = /\/(?:api\/)?user\/checkin$/i;
+const SUCCESS_MESSAGE_PATTERN =
+	/(已签到|签到成功|check[\s-]?in\s*(success|ok|done))/i;
+const VERIFY_RETRY_DELAYS_MS = [0, 300, 1200] as const;
+
 const buildCheckinUrl = (baseUrl: string) => {
 	const normalized = normalizeBaseUrl(baseUrl);
 	if (!normalized) {
 		return "";
+	}
+	if (CHECKIN_PATH_PATTERN.test(normalized)) {
+		return normalized;
 	}
 	if (normalized.endsWith("/api")) {
 		return `${normalized}/user/checkin`;
@@ -49,11 +57,12 @@ const buildCheckinUrl = (baseUrl: string) => {
 	return `${normalized}/api/user/checkin`;
 };
 
-const resolveCheckinBaseUrl = (site: CheckinTarget) => {
-	if (site.checkin_url?.trim()) {
-		return site.checkin_url;
+const resolveCheckinEndpoint = (site: CheckinTarget) => {
+	const customUrl = site.checkin_url?.trim();
+	if (customUrl) {
+		return buildCheckinUrl(customUrl);
 	}
-	return site.base_url;
+	return buildCheckinUrl(site.base_url);
 };
 
 const summarizePayload = (payload: unknown): PayloadSummary => {
@@ -77,17 +86,10 @@ const summarizePayload = (payload: unknown): PayloadSummary => {
 };
 
 const logCheckin = (
-	site: CheckinTarget,
-	stage: string,
-	data: Record<string, unknown>,
-) => {
-	console.log("[checkin]", {
-		id: site.id,
-		name: site.name,
-		stage,
-		...data,
-	});
-};
+	_site: CheckinTarget,
+	_stage: string,
+	_data: Record<string, unknown>,
+) => {};
 
 const parseSigned = (payload: unknown): boolean => {
 	if (!payload || typeof payload !== "object") {
@@ -150,6 +152,41 @@ const parseMessage = (payload: unknown, fallback: string) => {
 	return fallback;
 };
 
+const parseNumericCode = (codeValue: unknown): number | null => {
+	if (typeof codeValue === "number") {
+		return codeValue;
+	}
+	if (typeof codeValue === "string") {
+		const parsed = Number(codeValue);
+		return Number.isNaN(parsed) ? null : parsed;
+	}
+	return null;
+};
+
+const parseCheckinAccepted = (payload: unknown): boolean => {
+	if (parseSigned(payload)) {
+		return true;
+	}
+	if (!payload || typeof payload !== "object") {
+		return false;
+	}
+	const record = payload as Record<string, unknown>;
+	const message = String(
+		record.message ?? record.msg ?? record.error ?? "",
+	).trim();
+	const statusValue =
+		typeof record.status === "string" ? record.status.toLowerCase() : "";
+	const code = parseNumericCode(record.code);
+	return Boolean(
+		record.success === true ||
+			statusValue === "success" ||
+			statusValue === "ok" ||
+			statusValue === "done" ||
+			code === 0 ||
+			SUCCESS_MESSAGE_PATTERN.test(message),
+	);
+};
+
 const readJson = async (response: Response) => {
 	try {
 		return await response.json();
@@ -166,7 +203,7 @@ const readError = async (response: Response) => {
 export async function runCheckin(
 	site: CheckinTarget,
 ): Promise<CheckinResultItem> {
-	const endpoint = buildCheckinUrl(resolveCheckinBaseUrl(site));
+	const endpoint = resolveCheckinEndpoint(site);
 	if (!endpoint) {
 		return {
 			id: site.id,
@@ -268,13 +305,7 @@ export async function runCheckin(
 			};
 		}
 		const record = checkinPayload as Record<string, unknown>;
-		const codeValue = record.code;
-		const numericCode =
-			typeof codeValue === "number"
-				? codeValue
-				: typeof codeValue === "string"
-					? Number(codeValue)
-					: null;
+		const numericCode = parseNumericCode(record.code);
 		const explicitFailure = Boolean(
 			record.success === false ||
 				record.status === "error" ||
@@ -295,47 +326,62 @@ export async function runCheckin(
 				checkin_date: extractCheckinDate(checkinPayload),
 			};
 		}
-		logCheckin(site, "verify:request", { endpoint });
-		const verifyResp = await fetch(endpoint, { method: "GET", headers });
-		logCheckin(site, "verify:response", {
-			status: verifyResp.status,
-			ok: verifyResp.ok,
-		});
-		if (!verifyResp.ok) {
-			return {
-				id: site.id,
-				name: site.name,
-				status: "failed",
-				message: await readError(verifyResp),
-			};
+		let verifyPayload: unknown = null;
+		let verifyError = "";
+		for (const delayMs of VERIFY_RETRY_DELAYS_MS) {
+			if (delayMs > 0) {
+				await new Promise((resolve) => setTimeout(resolve, delayMs));
+			}
+			logCheckin(site, "verify:request", { endpoint, delayMs });
+			const verifyResp = await fetch(endpoint, { method: "GET", headers });
+			logCheckin(site, "verify:response", {
+				status: verifyResp.status,
+				ok: verifyResp.ok,
+			});
+			if (!verifyResp.ok) {
+				verifyError = await readError(verifyResp);
+				continue;
+			}
+			const payload = await readJson(verifyResp);
+			if (!payload) {
+				logCheckin(site, "verify:invalid-json", { delayMs });
+				verifyError = "签到验证响应非 JSON";
+				continue;
+			}
+			verifyPayload = payload;
+			logCheckin(site, "verify:payload", {
+				payload: summarizePayload(payload),
+				delayMs,
+			});
+			if (parseSigned(payload)) {
+				return {
+					id: site.id,
+					name: site.name,
+					status: "success",
+					message: parseMessage(checkinPayload, "签到成功"),
+					checkin_date:
+						extractCheckinDate(checkinPayload) ?? extractCheckinDate(payload),
+				};
+			}
+			verifyError = parseMessage(payload, "签到未生效");
 		}
-		const verifyPayload = await readJson(verifyResp);
-		if (!verifyPayload) {
-			logCheckin(site, "verify:invalid-json", {});
+		if (parseCheckinAccepted(checkinPayload)) {
 			return {
 				id: site.id,
 				name: site.name,
-				status: "failed",
-				message: "签到验证响应非 JSON",
-			};
-		}
-		logCheckin(site, "verify:payload", {
-			payload: summarizePayload(verifyPayload),
-		});
-		if (!parseSigned(verifyPayload)) {
-			return {
-				id: site.id,
-				name: site.name,
-				status: "failed",
-				message: parseMessage(verifyPayload, "签到未生效"),
-				checkin_date: extractCheckinDate(verifyPayload),
+				status: "success",
+				message: parseMessage(checkinPayload, "签到成功（状态同步中）"),
+				checkin_date:
+					extractCheckinDate(checkinPayload) ??
+					extractCheckinDate(verifyPayload) ??
+					beijingDateString(),
 			};
 		}
 		return {
 			id: site.id,
 			name: site.name,
-			status: "success",
-			message: parseMessage(checkinPayload, "签到成功"),
+			status: "failed",
+			message: verifyError || "签到未生效",
 			checkin_date:
 				extractCheckinDate(checkinPayload) ?? extractCheckinDate(verifyPayload),
 		};

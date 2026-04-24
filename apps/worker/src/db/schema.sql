@@ -30,12 +30,14 @@ CREATE TABLE IF NOT EXISTS channel_call_tokens (
   channel_id TEXT NOT NULL,
   name TEXT NOT NULL,
   api_key TEXT NOT NULL,
+  priority INTEGER NOT NULL DEFAULT 0,
   models_json TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS channel_call_tokens_channel_id ON channel_call_tokens(channel_id);
+CREATE INDEX IF NOT EXISTS idx_channel_call_tokens_channel_id
+  ON channel_call_tokens (channel_id, priority, created_at, id);
 
 CREATE TABLE IF NOT EXISTS tokens (
   id TEXT PRIMARY KEY,
@@ -51,6 +53,8 @@ CREATE TABLE IF NOT EXISTS tokens (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tokens_key_hash ON tokens (key_hash);
 
 CREATE TABLE IF NOT EXISTS usage_logs (
   id TEXT PRIMARY KEY,
@@ -70,10 +74,58 @@ CREATE TABLE IF NOT EXISTS usage_logs (
   upstream_status INTEGER,
   error_code TEXT,
   error_message TEXT,
+  failure_stage TEXT,
+  failure_reason TEXT,
+  usage_source TEXT,
+  error_meta_json TEXT,
+  call_token_id TEXT,
+  call_token_name TEXT,
   created_at TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS usage_logs_created_at ON usage_logs(created_at);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_created_at ON usage_logs (created_at);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_channel_id ON usage_logs (channel_id);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_token_id ON usage_logs (token_id);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_model ON usage_logs (model);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_status ON usage_logs (status);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_upstream_status ON usage_logs (upstream_status);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_token_created_at ON usage_logs (token_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_channel_created_at ON usage_logs (channel_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_model_created_at ON usage_logs (model, created_at);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_upstream_status_created_at ON usage_logs (upstream_status, created_at);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_status_created_at ON usage_logs (status, created_at);
+
+CREATE TABLE IF NOT EXISTS attempt_events (
+  id TEXT PRIMARY KEY,
+  trace_id TEXT NOT NULL,
+  attempt_index INTEGER NOT NULL,
+  channel_id TEXT,
+  provider TEXT,
+  model TEXT,
+  status TEXT NOT NULL,
+  error_class TEXT,
+  error_code TEXT,
+  http_status INTEGER,
+  latency_ms INTEGER NOT NULL,
+  upstream_request_id TEXT,
+  started_at TEXT NOT NULL,
+  ended_at TEXT NOT NULL,
+  raw_size_bytes INTEGER,
+  raw_hash TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_attempt_events_trace_attempt
+  ON attempt_events (trace_id, attempt_index);
+
+CREATE INDEX IF NOT EXISTS idx_attempt_events_created_at
+  ON attempt_events (created_at);
+
+CREATE INDEX IF NOT EXISTS idx_attempt_events_channel_created_at
+  ON attempt_events (channel_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_attempt_events_status_created_at
+  ON attempt_events (status, created_at);
 
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
@@ -95,6 +147,7 @@ CREATE TABLE IF NOT EXISTS channel_model_capabilities (
   last_err_at INTEGER,
   last_err_code TEXT,
   last_err_count INTEGER NOT NULL DEFAULT 0,
+  cooldown_count INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   PRIMARY KEY (channel_id, model)
@@ -105,3 +158,9 @@ CREATE INDEX IF NOT EXISTS idx_channel_model_capabilities_model
 
 CREATE INDEX IF NOT EXISTS idx_channel_model_capabilities_channel
   ON channel_model_capabilities (channel_id);
+
+CREATE INDEX IF NOT EXISTS idx_channel_model_capabilities_channel_ok
+  ON channel_model_capabilities (channel_id, last_ok_at);
+
+CREATE INDEX IF NOT EXISTS idx_channel_model_capabilities_model_err
+  ON channel_model_capabilities (model, last_err_at);

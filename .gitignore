@@ -1,11 +1,18 @@
-node_modules/
-dist/
-.DS_Store
-.env
-.env.*
-apps/ui/dist/
-apps/worker/.wrangler/
-tests/
+**/node_modules
+**/dist
+**/.DS_Store
+**/.env
+**/.env.*
+!.env.agent.example
+!.env.example
+**/.wrangler
+**/target
+**/tests
+playwright-report
+test-results
+.dev
 
 .helloagents/plan
 .helloagents/archive
+apps/worker/.wrangler*.toml
+apps/attempt-worker/.wrangler*.toml

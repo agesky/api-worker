@@ -2,14 +2,24 @@ name = "api-worker"
 main = "src/index.ts"
 compatibility_date = "2026-02-14"
 
-[vars]
-CORS_ORIGIN = "http://localhost:5173"
-PROXY_UPSTREAM_TIMEOUT_MS = "30000"
+[observability]
+enabled = true
+
+[observability.logs]
+enabled = true
+
+[placement]
+mode = "smart"
 
 [[d1_databases]]
 binding = "DB"
 database_name = "api-worker"
 database_id = "00000000-0000-0000-0000-000000000000"
+
+[[kv_namespaces]]
+binding = "KV_HOT"
+# Replaced by CI during deployment
+id = "00000000000000000000000000000000"
 
 [assets]
 directory = "../ui/dist"
@@ -21,9 +31,28 @@ run_worker_first = true
 name = "CHECKIN_SCHEDULER"
 class_name = "CheckinScheduler"
 
+[[services]]
+binding = "ATTEMPT_WORKER"
+service = "attempt-worker"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["CheckinScheduler"]
 
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["UsageLimiter"]
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["CacheVersionStore"]
+
+[[migrations]]
+tag = "v4"
+deleted_classes = ["UsageLimiter"]
+
+[[migrations]]
+tag = "v5"
+deleted_classes = ["CacheVersionStore"]
 
 
