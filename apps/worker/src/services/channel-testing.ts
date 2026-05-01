@@ -1,15 +1,13 @@
 import type { D1Database } from "@cloudflare/workers-types";
+import type { ProviderType } from "./channel-metadata";
 import { nowIso } from "../utils/time";
-import { normalizeBaseUrl } from "../utils/url";
-import { modelsToJson, normalizeModelsInput } from "./channel-models";
 import { upsertChannelModelCapabilities } from "./channel-model-capabilities";
+import { modelsToJson } from "./channel-models";
+import type { ModelDiscoveryResult } from "./providers";
+import type { SiteType } from "./site-metadata";
+import { discoverUpstreamModels } from "./upstreams";
 
-export type ChannelTestResult = {
-	ok: boolean;
-	elapsed: number;
-	models: string[];
-	payload?: unknown[] | { data?: unknown[] };
-};
+export type ChannelTestResult = ModelDiscoveryResult;
 
 export type ChannelToken = {
 	id?: string;
@@ -23,6 +21,8 @@ export type ChannelTokenTestItem = {
 	ok: boolean;
 	elapsed: number;
 	models: string[];
+	httpStatus?: number | null;
+	detail?: string | null;
 };
 
 export type ChannelTokenTestSummary = {
@@ -35,33 +35,34 @@ export type ChannelTokenTestSummary = {
 	items: ChannelTokenTestItem[];
 };
 
+export type FetchChannelModelsOptions = {
+	provider?: ProviderType;
+	siteType?: SiteType;
+	fetcher?: typeof fetch;
+};
+
+export type ChannelModelsFetcher = (
+	baseUrl: string,
+	apiKey: string,
+	options?: FetchChannelModelsOptions,
+) => Promise<ChannelTestResult>;
+
+export type ChannelTokenTestOptions = FetchChannelModelsOptions & {
+	fetcher?: ChannelModelsFetcher;
+};
+
 export async function fetchChannelModels(
 	baseUrl: string,
 	apiKey: string,
+	options: FetchChannelModelsOptions = {},
 ): Promise<ChannelTestResult> {
-	const target = `${normalizeBaseUrl(baseUrl)}/v1/models`;
-	const start = Date.now();
-	const response = await fetch(target, {
-		method: "GET",
-		headers: {
-			Authorization: `Bearer ${apiKey}`,
-			"x-api-key": apiKey,
-			"Content-Type": "application/json",
-		},
+	return discoverUpstreamModels({
+		siteType: options.siteType ?? options.provider ?? "new-api",
+		baseUrl,
+		apiKey,
+		provider: options.provider,
+		fetcher: options.fetcher,
 	});
-
-	const elapsed = Date.now() - start;
-	if (!response.ok) {
-		return { ok: false, elapsed, models: [] };
-	}
-
-	const payload = (await response.json().catch(() => ({ data: [] }))) as
-		| { data?: unknown[] }
-		| unknown[];
-	const models = normalizeModelsInput(
-		Array.isArray(payload) ? payload : (payload.data ?? payload),
-	);
-	return { ok: true, elapsed, models, payload };
 }
 
 /**
@@ -78,10 +79,10 @@ export async function fetchChannelModels(
 export async function testChannelTokens(
 	baseUrl: string,
 	tokens: ChannelToken[],
-	fetcher: (
-		baseUrl: string,
-		apiKey: string,
-	) => Promise<ChannelTestResult> = fetchChannelModels,
+	fetcherOrOptions:
+		| ChannelModelsFetcher
+		| ChannelTokenTestOptions = fetchChannelModels,
+	maybeOptions: ChannelTokenTestOptions = {},
 ): Promise<ChannelTokenTestSummary> {
 	if (tokens.length === 0) {
 		return {
@@ -95,13 +96,31 @@ export async function testChannelTokens(
 		};
 	}
 
+	const fetcher =
+		typeof fetcherOrOptions === "function"
+			? fetcherOrOptions
+			: (fetcherOrOptions.fetcher ?? fetchChannelModels);
+	const provider =
+		typeof fetcherOrOptions === "function"
+			? maybeOptions.provider
+			: fetcherOrOptions.provider;
+	const siteType =
+		typeof fetcherOrOptions === "function"
+			? maybeOptions.siteType
+			: fetcherOrOptions.siteType;
+	const fetcherOptions =
+		typeof fetcherOrOptions === "function" ? maybeOptions : fetcherOrOptions;
 	const items: ChannelTokenTestItem[] = [];
 	const modelSet = new Set<string>();
 	let success = 0;
 	let totalElapsed = 0;
 
 	for (const token of tokens) {
-		const result = await fetcher(baseUrl, token.api_key);
+		const result = await fetcher(baseUrl, token.api_key, {
+			provider,
+			siteType,
+			fetcher: fetcherOptions.fetcher,
+		});
 		totalElapsed += result.elapsed;
 		if (result.ok) {
 			success += 1;
@@ -115,6 +134,8 @@ export async function testChannelTokens(
 			ok: result.ok,
 			elapsed: result.elapsed,
 			models: result.models,
+			httpStatus: result.httpStatus ?? null,
+			detail: result.detail ?? null,
 		});
 	}
 
@@ -131,6 +152,55 @@ export async function testChannelTokens(
 		models: Array.from(modelSet),
 		items,
 	};
+}
+
+export function summarizeChannelTokenFailures(
+	items: ChannelTokenTestItem[],
+): string | null {
+	const failedItems = items.filter((item) => !item.ok);
+	if (failedItems.length === 0) {
+		return null;
+	}
+	const groups = new Map<
+		string,
+		{
+			tokenLabels: string[];
+			statusLabel: string;
+			detail: string;
+		}
+	>();
+	for (const item of failedItems) {
+		const tokenLabel =
+			String(item.tokenName ?? "").trim() ||
+			String(item.tokenId ?? "").trim() ||
+			"主调用令牌";
+		const statusLabel =
+			item.httpStatus === null || item.httpStatus === undefined
+				? "请求失败"
+				: `HTTP ${item.httpStatus}`;
+		const detail = String(item.detail ?? "").trim();
+		const groupKey = `${statusLabel}@@${detail}`;
+		const current = groups.get(groupKey);
+		if (current) {
+			if (!current.tokenLabels.includes(tokenLabel)) {
+				current.tokenLabels.push(tokenLabel);
+			}
+			continue;
+		}
+		groups.set(groupKey, {
+			tokenLabels: [tokenLabel],
+			statusLabel,
+			detail,
+		});
+	}
+	return Array.from(groups.values())
+		.map((group) => {
+			const tokenSummary = group.tokenLabels.join("、");
+			return group.detail
+				? `${tokenSummary}：${group.statusLabel} | ${group.detail}`
+				: `${tokenSummary}：${group.statusLabel}`;
+		})
+		.join("；");
 }
 
 export async function updateChannelTestResult(

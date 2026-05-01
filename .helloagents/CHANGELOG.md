@@ -4,6 +4,125 @@
 
 ### 变更
 
+- **[channels/sites/admin-ui/settings]**: 统一站点验证与恢复评估语义，验证结果改为阶段化输出并接入真实 provider-aware 服务验证链路 — by openclaw
+  - 方案: [202604042102_site-verification-system](plan/202604042102_site-verification-system/)
+  - 决策: site-verification-system#D001(统一站点验证语义并复用真实代理链路)
+
+- **[tooling/docs]**: 清理仓库内本地 unit/service 测试文件，保留 Playwright E2E，并同步校验链说明 — by openclaw
+  - 方案: [202604031348_remove-all-test-files](archive/2026-04/202604031348_remove-all-test-files/)
+  - 决策: remove-all-test-files#D001(删除本地 unit/service 测试，但保留 Playwright E2E)
+
+- **[tooling]**: `bun run autostart` 新增 Linux `systemd --user` 自启动支持，并保留 Windows 计划任务实现 — by openclaw
+  - 方案: [202604031311_linux-systemd-autostart](archive/2026-04/202604031311_linux-systemd-autostart/)
+  - 决策: linux-systemd-autostart#D001(Linux 自启动采用 systemd --user service)
+
+- **[tooling/docs]**: 统一本地启动运行时目录，Windows 自启动改为计划任务，并新增后台日志模式控制 — by lsy
+  - 方案: [202604022339_startup-runtime-hardening](archive/2026-04/202604022339_startup-runtime-hardening/)
+  - 决策: startup-runtime-hardening#D001(Windows 自启动改用计划任务), startup-runtime-hardening#D002(运行时配置与日志统一收敛到 .dev)
+
+### 修复
+
+- **[proxy/sites/usage]**: 收紧成功判定与恢复探针语义；`200` 的 HTML 假成功站点不再被恢复，客户端未收包时使用日志改记 `client_disconnected`，非流式缺失 usage 也不再默认为绿色成功 — by lsy
+  - 方案: [202604151107_fix-proxy-false-success-and-site-recovery](plan/202604151107_fix-proxy-false-success-and-site-recovery/)
+  - 决策: fix-proxy-false-success-and-site-recovery#D001(统一成功真实性判定并复用于站点验证), fix-proxy-false-success-and-site-recovery#D002(客户端未收包单独记为 client_disconnected)
+
+- **[proxy/usage]**: 修复大请求 offload 路径仍可能放过非流式缺失 usage，并在最终 usage 落库前补一层缺失 usage 兜底，避免再次出现 `usage_source=none` 仍记 `200` 成功 — by Codex
+  - 类型: 快速修改（无方案包）
+  - 文件: apps/shared-core/src/usage-policy.ts, apps/worker/src/shared/proxy.ts, .helloagents/modules/usage.md
+
+- **[proxy/usage]**: 补齐流式下游交付观测；流式 usage 改为按真实交付结果落库，客户端断开会区分首包前/首包后，避免“上游成功但客户端没收到”仍被记成绿色成功 — by Codex
+  - 类型: 快速修改（无方案包）
+  - 文件: apps/worker/src/shared/proxy.ts, .helloagents/modules/usage.md
+
+- **[worker/proxy]**: 补齐普通单次 attempt 路径的取消传播；本地 dev 默认走 `LOCAL_ATTEMPT_WORKER_URL` 时，direct/local_http/binding 三条调用链都会在客户端断链后停止继续重试 — by lsy
+  - 方案: [202604091222_stop-local-dev-retry-after-client-disconnect](archive/2026-04/202604091222_stop-local-dev-retry-after-client-disconnect/)
+  - 决策: stop-local-dev-retry-after-client-disconnect#D001(先补齐普通 attempt 取消传播，不直接改 dev transport 默认值)
+
+- **[worker/proxy]**: 修复客户端断开连接后重试链路仍可能继续执行的问题；现在本地重试与 attempt-worker 分发重试都会在调用方断链后停止后续 attempt — by lsy
+  - 方案: [202604091009_stop-retry-on-client-disconnect](archive/2026-04/202604091009_stop-retry-on-client-disconnect/)
+
+- **[proxy/sites/admin-ui]**: 修复候选站点筛选与真实模型解析口径不一致、调用 token 模型写回污染，以及使用日志缺少策略判定上下文的问题 — by Codex
+  - 方案: [202604071250_candidate-routing-alignment](plan/202604071250_candidate-routing-alignment/)
+- **[worker/proxy]**: 修复渠道不支持目标模型时仍可能回退到首个已知模型并误发请求的问题；现在仅允许显式 `model_mapping` 改写模型，未命中模型的渠道会在候选筛选与实际请求阶段一并跳过 — by Codex
+  - 类型: 快速修改（无方案包）
+  - 文件: apps/worker/src/services/channel-routing.ts, apps/worker/src/shared/proxy.ts
+
+- **[tooling]**: 修复 Linux `systemd --user` 自启动仍经由 `--bg` 二次派生导致开机状态误判，改为直接托管守护进程并增强 `autostart status` 运行态识别 — by openclaw
+  - 方案: [202604031515_linux-autostart-boot-fix](archive/2026-04/202604031515_linux-autostart-boot-fix/)
+
+- **[proxy/usage]**: 删除 stream usage 旁路解析的固定 `maxBytes` 截断，避免长 Responses 流在尾部 usage 到达前被误记为 `stream_meta_partial` — by lsy
+  - 方案: [202604030046_remove-stream-usage-maxbytes](archive/2026-04/202604030046_remove-stream-usage-maxbytes/)
+- **[worker/proxy]**: 修复 OpenAI→Anthropic 流式适配仅转文本导致 Claude Code 无法消费工具调用，补齐 `tool_calls -> tool_use + input_json_delta` 事件链 — by Codex
+  - 类型: 快速修改（无方案包）
+  - 文件: apps/worker/src/services/chat-response-adapter.ts, apps/worker/src/services/chat-response-adapter.test.ts, .helloagents/modules/proxy.md
+
+### 快速修改
+
+- **[tooling]**: 修复计划任务直接执行 `bun.exe` 仍可能弹出控制台窗口，改为隐藏 PowerShell 启动器包裹 `bun run dev -- --bg` — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: scripts/autostart.mjs, README.md, .helloagents/modules/tooling.md
+
+- **[tooling]**: 修复 Windows 后台守护进程子进程仍可能弹出控制台窗口，改为隐藏窗口并显式重定向 stdout/stderr 到日志文件或空设备 — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: scripts/dev.mjs, README.md, .helloagents/modules/tooling.md
+
+- **[tooling]**: 修复输出到 `.dev/generated/wrangler/` 后 `main` 与 `assets.directory` 仍按相对路径解析，导致 Wrangler 找不到入口文件 — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: scripts/prepare-remote-config.mjs, scripts/prepare-no-hot-cache-config.mjs, .helloagents/modules/tooling.md
+
+- **[worker/proxy]**: 删除 `chat-response-adapter` 与 `provider-transform` 中未使用的 JS 回退转换辅助函数，保留 WASM 主路径 — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: apps/worker/src/services/chat-response-adapter.ts:1-140, apps/worker/src/services/provider-transform.ts:1-170
+
+### ????
+
+- **[proxy/usage]**: ???? usage ?????? ? by lsy
+  - ??: ??????????
+  - ??: apps/worker/src/routes/proxy.ts:70-560, .helloagents/modules/proxy.md:20-40, .helloagents/modules/usage.md:10-30
+
+
+### ??
+
+- **[proxy/usage]**: ?? usage ???????????? ? by lsy
+  - ??: [202603181533_usage-event-call-fix](archive/2026-03/202603181533_usage-event-call-fix/)
+
+
+### 新增
+
+- **[deploy-workflow]**: 新增本地一键部署脚本（init/update） — by lsy
+  - 方案: [202603161914_local-deploy-script](archive/2026-03/202603161914_local-deploy-script/)
+
+### 变更
+
+- **[settings/admin-ui]**: 设置页分区重排并内联队列状态与使用数量 — by lsy
+  - 方案: [202603181300_settings-panel-sections](archive/2026-03/202603181300_settings-panel-sections/)
+  - 决策: settings-panel-sections#D001(只读项内联展示)
+- **[settings/admin-ui]**: 运行时设置改为仅数据库生效，移除环境变量回退 — by lsy
+  - 方案: [202603181221_settings-db-only](archive/2026-03/202603181221_settings-db-only/)
+  - 决策: settings-db-only#D001(停用环境变量回退)
+- **[settings/proxy/usage/admin-ui]**: 运行时设置可在后台配置，新增队列日限额与直写比例并接入 UsageLimiter — by lsy
+  - 方案: [202603180031_usage-queue-simplified](archive/2026-03/202603180031_usage-queue-simplified/)
+- **[cache/settings/proxy/usage/admin-ui]**: 引入分组缓存与自动失效，面板/日志/模型短期缓存可配置，清理节流并补齐索引 — by lsy
+  - 方案: [202603172242_cache-strategy-optimizations](plan/202603172242_cache-strategy-optimizations/)
+- **[deploy/proxy/settings]**: 调整 stream usage 默认值并避免部署覆盖云端变量 — by lsy
+  - 方案: [202603170025_runtime-defaults-no-override](archive/2026-03/202603170025_runtime-defaults-no-override/)
+- **[admin-ui/usage]**: 使用日志渠道筛选改为搜索多选，分页条数与列偏好本地记忆 — by lsy
+  - 方案: [202603170949_shadcn-unified-ui](archive/2026-03/202603170949_shadcn-unified-ui/)
+- **[admin-ui/usage]**: 状态展示改为仅显示上游状态码并在详情弹窗展示完整错误摘要 — by lsy
+  - 方案: [202603170949_shadcn-unified-ui](archive/2026-03/202603170949_shadcn-unified-ui/)
+- **[admin-ui/usage]**: 修复使用日志多选下拉的宽度与定位 — by lsy
+  - 方案: [202603170949_shadcn-unified-ui](archive/2026-03/202603170949_shadcn-unified-ui/)
+- **[admin-ui]**: 页面布局拆分为标题/筛选/数据区，数据面板筛选条更紧凑 — by lsy
+  - 方案: [202603170949_shadcn-unified-ui](archive/2026-03/202603170949_shadcn-unified-ui/)
+- **[usage]**: 使用日志筛选支持渠道/令牌/模型/状态多选查询 — by lsy
+  - 方案: [202603170949_shadcn-unified-ui](archive/2026-03/202603170949_shadcn-unified-ui/)
+- **[deploy-workflow]**: 本地部署脚本改为纯本地流程（构建 + 本地迁移） — by lsy
+  - 方案: [202603162008_local-deploy-local-only](archive/2026-03/202603162008_local-deploy-local-only/)
+- **[settings/admin-ui]**: 设置接口返回运行时配置，管理台只读展示并指引环境变量配置
+  - 方案: [202603161748_settings-runtime-env-display](archive/2026-03/202603161748_settings-runtime-env-display/)
+- **[deploy-workflow]**: 部署流程自动创建 `usage-events` Queue（存在则跳过） — by lsy
+  - 方案: [202603161714_deploy-create-queue](archive/2026-03/202603161714_deploy-create-queue/)
+  - 决策: deploy-create-queue#D001(CI 自动创建队列)
 - **[admin-ui/dashboard]**: Dashboard 样板页引入 Apple 风主题（bento grid 卡片/表格/按钮重绘）
   - 方案: [202603152243_apple-ui-sample-dashboard](archive/2026-03/202603152243_apple-ui-sample-dashboard/)
   - 文件: apps/ui/src/features/DashboardView.tsx, apps/ui/src/styles.css, .helloagents/modules/admin-ui.md, .helloagents/modules/dashboard.md
@@ -20,6 +139,10 @@
 
 ### 微调
 
+- **[admin-ui/settings]**: 运行时配置卡片展示并内联环境变量名 — by lsy
+  - 方案: [202603162329_settings-runtime-config-cards](archive/2026-03/202603162329_settings-runtime-config-cards/)
+- **[proxy/settings]**: 流式 usage 解析上限支持 `0` 表示无限制 — by lsy
+  - 方案: [202603161849_stream-usage-unlimited](archive/2026-03/202603161849_stream-usage-unlimited/)
 - **[worker/models]**: 引入通道模型能力表并基于“模型广场测试结果+可配置TTL（默认2小时）”进行模型发布与路由匹配
   - 类型: 微调（无方案包）
   - 文件: apps/worker/migrations/0004_add_channel_model_capabilities.sql, apps/worker/src/services/channel-model-capabilities.ts, apps/worker/src/services/channel-testing.ts, apps/worker/src/services/settings.ts, apps/worker/src/routes/settings.ts, apps/worker/src/routes/models.ts, apps/worker/src/routes/newapiUsers.ts, apps/worker/src/routes/proxy.ts, tests/worker/channel-model-capabilities.test.ts, tests/worker/newapi.test.ts, helloagents/modules/settings.md, helloagents/modules/models.md, helloagents/modules/proxy.md
@@ -176,9 +299,74 @@
 
 ### 修复
 
+- **[deploy-workflow]**: 队列检查改为 Node 解析并容错非 JSON 输出 — by lsy
+  - 方案: [202603162220_deploy-queue-json-parse](archive/2026-03/202603162220_deploy-queue-json-parse/)
+  - 决策: deploy-queue-json-parse#D001(队列列表解析方式选择)
+- **[dashboard]**: 修复数据面板筛选 SQL 歧义导致的 500 错误 — by lsy
+  - 方案: [202603170949_shadcn-unified-ui](archive/2026-03/202603170949_shadcn-unified-ui/)
+- **[admin-ui/sites]**: 修复站点管理筛选区域 JSX 结构错误导致构建失败 — by lsy
+  - 方案: [202603170949_shadcn-unified-ui](archive/2026-03/202603170949_shadcn-unified-ui/)
 - **[admin-ui]**: Toast 通知固定右上并带进度条，弹窗改为全屏遮罩，筛选标题横排 — by lsy
   - 方案: [202603160049_modal-toast-search-fixes](archive/2026-03/202603160049_modal-toast-search-fixes/)
   - 决策: modal-toast-search-fixes#D001(通知统一为右上 Toast)
+
+### 快速修改
+
+- **[deploy-workflow]**: 本地部署脚本移除 .env 自动生成与加载 — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: scripts/deploy.mjs:1-292
+- **[admin-ui/settings]**: 缓存 TTL 与版本成对展示为卡片 — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: apps/ui/src/features/SettingsView.tsx:417-632
+- **[admin-ui/settings]**: 缓存版本调整为小标题展示 — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: apps/ui/src/features/SettingsView.tsx:566-584
+- **[ci]**: 队列创建失败时识别“名称已占用(11009)”并视为已存在 — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: .github/workflows/deploy.yml:263-320,416-473
+- **[ci]**: 队列创建失败时输出完整错误信息 — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: .github/workflows/deploy.yml:263-320,416-473
+- **[ci]**: 修复队列检查脚本的 heredoc 缩进导致的 YAML 解析失败 — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: .github/workflows/deploy.yml:263-316,416-469
+- **[tooling]**: dev 脚本适配 bun 可执行路径解析 — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: scripts/dev.mjs
+- **[deploy-workflow]**: 本地部署脚本适配 bun 可执行路径解析 — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: scripts/deploy.mjs
+- **[tooling]**: 将 `dev:all` 简化为 `dev` 脚本 — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: package.json, README.md
+- **[deploy-workflow]**: 缺少环境变量时 .env 优先从 .env.example 生成 — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: scripts/deploy.mjs, .helloagents/modules/deploy-workflow.md
+- **[deploy-workflow]**: .env.example 注释改为中文并补充默认代理配置 — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: .env.example
+- **[deploy-workflow]**: 本地部署脚本补充 .env 占位与 .env.example 模板 — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: scripts/deploy.mjs, .env.example, .helloagents/modules/deploy-workflow.md, README.md
+- **[deploy-workflow]**: 本地部署脚本未传参时支持交互选择 — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: scripts/deploy.mjs, README.md, .helloagents/modules/deploy-workflow.md
+- **[deploy-workflow]**: 增加本地部署脚本的 package scripts 快捷入口 — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: package.json, README.md
+- **[docs]**: README 补充系统设置的运行时环境变量说明
+  - 类型: 快速修改（无方案包）
+  - 文件: README.md
+- **[admin-ui]**: 加深弹窗遮罩并支持多条通知弹窗，使用日志表头遮罩更清晰 — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: apps/ui/src/App.tsx:129-220,1357-1510, apps/ui/src/features/AppLayout.tsx:1-195, apps/ui/src/features/SitesView.tsx:582, apps/ui/src/features/TokensView.tsx:415, apps/ui/src/features/UsageView.tsx:209-219,377, apps/ui/src/styles.css:424-440
+
+## [0.9.7] - 2026-03-16
+
+### 变更
+- **[proxy/usage]**: 引入 usage 队列异步写入与流式解析降载，增加 CPU 降载开关 — by lsy
+  - 方案: [202603161542_proxy-cpu-limit-mitigation](archive/2026-03/202603161542_proxy-cpu-limit-mitigation/)
+  - 决策: proxy-cpu-limit-mitigation#D001(用量写入异步化策略)
 
 ## [0.9.6] - 2026-03-15
 

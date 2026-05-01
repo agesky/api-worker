@@ -1,13 +1,8 @@
+import { normalizeSiteType } from "../../../shared-core/src";
 import { safeJsonParse } from "../utils/json";
 import { normalizeBaseUrl } from "../utils/url";
-
-export type SiteType =
-	| "new-api"
-	| "done-hub"
-	| "subapi"
-	| "openai"
-	| "anthropic"
-	| "gemini";
+export type { SiteType } from "../../../shared-core/src";
+import type { SiteType } from "../../../shared-core/src";
 
 export type EndpointOverrides = {
 	chat_url?: string | null;
@@ -37,18 +32,7 @@ export function parseSiteMetadata(
 	raw: string | null | undefined,
 ): SiteMetadata {
 	const parsed = safeJsonParse<Record<string, unknown>>(raw, {});
-	const rawType = parsed.site_type;
-	const site_type =
-		rawType === "done-hub" ||
-		rawType === "new-api" ||
-		rawType === "subapi" ||
-		rawType === "openai" ||
-		rawType === "anthropic" ||
-		rawType === "gemini"
-			? (rawType as SiteType)
-			: rawType === "custom"
-				? "subapi"
-				: DEFAULT_SITE_TYPE;
+	const site_type = normalizeSiteType(parsed.site_type ?? DEFAULT_SITE_TYPE);
 	const overrides =
 		parsed.endpoint_overrides && typeof parsed.endpoint_overrides === "object"
 			? (parsed.endpoint_overrides as Record<string, unknown>)

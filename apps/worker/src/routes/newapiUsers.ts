@@ -1,9 +1,7 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../env";
 import { newApiAuth } from "../middleware/newApiAuth";
-import {
-	listModelsByChannelWithFallback,
-} from "../services/channel-model-capabilities";
+import { listModelsByChannelWithFallback } from "../services/channel-model-capabilities";
 import { listActiveChannels } from "../services/channel-repo";
 import { newApiSuccess } from "../utils/newapi-response";
 
