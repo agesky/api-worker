@@ -1,0 +1,70 @@
+import {
+	buildAutomaticRequestEntryFormatOrder,
+	getRequestEntryFormatRequestEndpointType,
+	getSupportedRequestEntryFormatsForSiteType,
+	resolveRequestEntryFormatUpstreamProvider,
+	type SiteType,
+} from "../../../shared-core/src";
+import type { EndpointType, ProviderType } from "./provider-transform";
+import type {
+	RequestEntry,
+	RequestEntryFormat,
+} from "../domains/site/metadata";
+
+export function resolveEndpointTypeForRequestEntryFormat(
+	format: RequestEntryFormat | null,
+	fallbackEndpointType: EndpointType,
+): EndpointType {
+	return format
+		? getRequestEntryFormatRequestEndpointType(format)
+		: fallbackEndpointType;
+}
+
+export function resolveUpstreamProviderForRequestEntryFormat(
+	format: RequestEntryFormat | null,
+	fallbackProvider: ProviderType,
+): ProviderType {
+	return format
+		? resolveRequestEntryFormatUpstreamProvider(format)
+		: fallbackProvider;
+}
+
+function isFormatCompatibleWithEndpointType(
+	format: RequestEntryFormat,
+	endpointType: EndpointType,
+): boolean {
+	if (endpointType !== "chat" && endpointType !== "responses") {
+		return false;
+	}
+	if (resolveRequestEntryFormatUpstreamProvider(format) !== "openai") {
+		return true;
+	}
+	return getRequestEntryFormatRequestEndpointType(format) === endpointType;
+}
+
+function buildAutomaticFormatOrder(
+	siteType: SiteType,
+	endpointType: EndpointType,
+): RequestEntryFormat[] {
+	const supportedFormats = getSupportedRequestEntryFormatsForSiteType(
+		siteType,
+	).filter((format) =>
+		isFormatCompatibleWithEndpointType(format, endpointType),
+	);
+	return buildAutomaticRequestEntryFormatOrder({
+		formats: supportedFormats,
+		endpointType: endpointType === "responses" ? "responses" : "chat",
+	});
+}
+
+export function buildRequestEntryFormatAttemptOrder(options: {
+	siteType: SiteType;
+	entry?: RequestEntry | null;
+	endpointType: EndpointType;
+}): RequestEntryFormat[] {
+	const explicitFormat = options.entry?.format ?? null;
+	if (explicitFormat) {
+		return [explicitFormat];
+	}
+	return buildAutomaticFormatOrder(options.siteType, options.endpointType);
+}

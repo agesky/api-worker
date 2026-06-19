@@ -1,10 +1,9 @@
+import { normalizeSiteType } from "../../../shared-core/src";
 import { type Context, Hono } from "hono";
 import type { AppEnv } from "../env";
 import { newApiAuth } from "../middleware/newApiAuth";
-import {
-	collectUniqueModelIds,
-	extractModelIds,
-} from "../services/channel-models";
+import { extractModelIds } from "../domains/channel/models";
+import { listEffectiveModelsByChannel } from "../domains/channel/effective-models";
 import {
 	channelExists,
 	countChannels,
@@ -15,11 +14,18 @@ import {
 	listActiveChannels,
 	listChannels,
 	updateChannel,
-} from "../services/channel-repo";
+} from "../domains/channel/repo";
 import {
 	fetchChannelModels,
 	updateChannelTestResult,
-} from "../services/channel-testing";
+} from "../domains/channel/testing";
+import { parseChannelMetadata } from "../domains/channel/metadata";
+import {
+	parseProviderType,
+	resolveUpstreamProvider,
+} from "../services/upstreams";
+import { triggerBackupAfterDataChange } from "../domains/backup/auto-sync";
+import { invalidateSelectionHotCache } from "../services/hot-kv";
 import {
 	mergeMetadata,
 	modelsToJson,
@@ -43,6 +49,10 @@ import { normalizeBaseUrl } from "../utils/url";
 const newapi = new Hono<AppEnv>({ strict: false });
 newapi.use("*", newApiAuth);
 
+function parseSiteTypeInput(value: unknown) {
+	return value === undefined ? undefined : normalizeSiteType(value);
+}
+
 function readTag(metadataJson: string | null | undefined): string | null {
 	const metadata = safeJsonParse<Record<string, unknown>>(metadataJson, {});
 	const tag = metadata.tag;
@@ -54,7 +64,21 @@ function readTag(metadataJson: string | null | undefined): string | null {
 
 async function handleModelsList(c: Context<AppEnv>) {
 	const channels = await listActiveChannels(c.env.DB);
-	const data = collectUniqueModelIds(channels).map((id) => ({ id, name: id }));
+	const map = await listEffectiveModelsByChannel(
+		c.env.DB,
+		channels.map((channel) => ({
+			id: channel.id,
+			models_json: channel.models_json,
+			metadata_json: channel.metadata_json,
+		})),
+	);
+	const modelSet = new Set<string>();
+	for (const models of map.values()) {
+		for (const id of models) {
+			modelSet.add(id);
+		}
+	}
+	const data = Array.from(modelSet).map((id) => ({ id, name: id }));
 	return newApiSuccess(c, data);
 }
 
@@ -206,7 +230,11 @@ newapi.put("/tag", async (c) => {
 			.bind(weight, priority, mergedMetadata, nowIso(), row.id)
 			.run();
 	}
+	if (targets.length > 0) {
+		await triggerBackupAfterDataChange(c.env.DB);
+	}
 
+	await invalidateSelectionHotCache(c.env.KV_HOT);
 	return newApiSuccess(c);
 });
 
@@ -226,7 +254,11 @@ newapi.post("/tag/enabled", async (c) => {
 			.bind("active", nowIso(), row.id)
 			.run();
 	}
+	if (targets.length > 0) {
+		await triggerBackupAfterDataChange(c.env.DB);
+	}
 
+	await invalidateSelectionHotCache(c.env.KV_HOT);
 	return newApiSuccess(c);
 });
 
@@ -246,7 +278,11 @@ newapi.post("/tag/disabled", async (c) => {
 			.bind("disabled", nowIso(), row.id)
 			.run();
 	}
+	if (targets.length > 0) {
+		await triggerBackupAfterDataChange(c.env.DB);
+	}
 
+	await invalidateSelectionHotCache(c.env.KV_HOT);
 	return newApiSuccess(c);
 });
 
@@ -294,7 +330,9 @@ newapi.post("/", async (c) => {
 		created_at: now,
 		updated_at: now,
 	});
+	await triggerBackupAfterDataChange(c.env.DB);
 
+	await invalidateSelectionHotCache(c.env.KV_HOT);
 	return newApiSuccess(c);
 });
 
@@ -347,7 +385,9 @@ newapi.put("/", async (c) => {
 		last_checkin_at: current.last_checkin_at ?? null,
 		updated_at: nowIso(),
 	});
+	await triggerBackupAfterDataChange(c.env.DB);
 
+	await invalidateSelectionHotCache(c.env.KV_HOT);
 	return newApiSuccess(c);
 });
 
@@ -358,6 +398,8 @@ newapi.delete("/:id", async (c) => {
 		return newApiFailure(c, 404, "渠道不存在");
 	}
 	await deleteChannel(c.env.DB, id);
+	await triggerBackupAfterDataChange(c.env.DB);
+	await invalidateSelectionHotCache(c.env.KV_HOT);
 	return newApiSuccess(c);
 });
 
@@ -367,10 +409,13 @@ newapi.get("/test/:id", async (c) => {
 	if (!channel) {
 		return newApiFailure(c, 404, "渠道不存在");
 	}
+	const metadata = parseChannelMetadata(channel.metadata_json);
+	const provider = resolveUpstreamProvider(metadata.site_type);
 
 	const result = await fetchChannelModels(
 		String(channel.base_url),
 		String(channel.api_key),
+		{ siteType: metadata.site_type, provider },
 	);
 	if (!result.ok) {
 		await updateChannelTestResult(c.env.DB, id, {
@@ -386,6 +431,7 @@ newapi.get("/test/:id", async (c) => {
 		models: result.models,
 	});
 
+	await invalidateSelectionHotCache(c.env.KV_HOT);
 	return newApiSuccess(c, undefined, "测试成功");
 });
 
@@ -399,9 +445,12 @@ newapi.post("/test", async (c) => {
 	if (!channel) {
 		return newApiFailure(c, 404, "渠道不存在");
 	}
+	const metadata = parseChannelMetadata(channel.metadata_json);
+	const provider = resolveUpstreamProvider(metadata.site_type);
 	const result = await fetchChannelModels(
 		String(channel.base_url),
 		String(channel.api_key),
+		{ siteType: metadata.site_type, provider },
 	);
 	if (!result.ok) {
 		await updateChannelTestResult(c.env.DB, String(id), {
@@ -415,6 +464,7 @@ newapi.post("/test", async (c) => {
 		elapsed: result.elapsed,
 		models: result.models,
 	});
+	await invalidateSelectionHotCache(c.env.KV_HOT);
 	return newApiSuccess(c, undefined, "测试成功");
 });
 
@@ -424,10 +474,13 @@ newapi.get("/fetch_models/:id", async (c) => {
 	if (!channel) {
 		return newApiFailure(c, 404, "渠道不存在");
 	}
+	const metadata = parseChannelMetadata(channel.metadata_json);
+	const provider = resolveUpstreamProvider(metadata.site_type);
 
 	const result = await fetchChannelModels(
 		String(channel.base_url),
 		String(channel.api_key),
+		{ siteType: metadata.site_type, provider },
 	);
 	if (!result.ok) {
 		await updateChannelTestResult(c.env.DB, id, {
@@ -443,6 +496,7 @@ newapi.get("/fetch_models/:id", async (c) => {
 		models: result.models,
 	});
 
+	await invalidateSelectionHotCache(c.env.KV_HOT);
 	return newApiSuccess(c, result.models);
 });
 
@@ -452,9 +506,18 @@ newapi.post("/fetch_models", async (c) => {
 		return newApiFailure(c, 400, "缺少必要参数");
 	}
 
+	const siteType = parseSiteTypeInput(body?.site_type) ?? "new-api";
+	const provider = resolveUpstreamProvider(
+		siteType,
+		parseProviderType(body?.provider),
+	);
 	const result = await fetchChannelModels(
 		String(body.base_url),
 		String(body.key),
+		{
+			siteType,
+			provider,
+		},
 	);
 	if (!result.ok) {
 		return newApiFailure(c, 502, "获取模型失败");

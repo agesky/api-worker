@@ -2,20 +2,26 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import type { AppEnv } from "./env";
 import { adminAuth } from "./middleware/adminAuth";
+import attemptEventsRoutes from "./routes/attempt-events";
+import backupRoutes from "./routes/backup";
 import authRoutes from "./routes/auth";
 import channelRoutes from "./routes/channels";
 import dashboardRoutes from "./routes/dashboard";
+import canonicalModelRoutes from "./routes/canonical-models";
 import modelRoutes from "./routes/models";
 import newapiChannelRoutes from "./routes/newapiChannels";
 import newapiGroupRoutes from "./routes/newapiGroups";
 import newapiUserRoutes from "./routes/newapiUsers";
+import pricingRoutes from "./routes/pricing";
 import proxyRoutes from "./routes/proxy";
 import settingsRoutes from "./routes/settings";
 import siteRoutes from "./routes/sites";
 import tokenRoutes from "./routes/tokens";
 import usageRoutes from "./routes/usage";
+import { warmupWasmCore } from "./wasm/core";
 
 const app = new Hono<AppEnv>({ strict: false });
+warmupWasmCore();
 app.use(
 	"/api/*",
 	cors({
@@ -70,8 +76,12 @@ app.route("/api/auth", authRoutes);
 app.route("/api/channels", channelRoutes);
 app.route("/api/sites", siteRoutes);
 app.route("/api/models", modelRoutes);
+app.route("/api/canonical-models", canonicalModelRoutes);
+app.route("/api/pricing", pricingRoutes);
 app.route("/api/tokens", tokenRoutes);
 app.route("/api/usage", usageRoutes);
+app.route("/api/attempt-events", attemptEventsRoutes);
+app.route("/api/backup", backupRoutes);
 app.route("/api/dashboard", dashboardRoutes);
 app.route("/api/settings", settingsRoutes);
 app.route("/api/channel", newapiChannelRoutes);
@@ -81,14 +91,8 @@ app.route("/api/group", newapiGroupRoutes);
 app.route("/v1", proxyRoutes);
 app.route("/v1beta", proxyRoutes);
 
-app.onError((err, c) => {
-	console.error("[app:error]", {
-		method: c.req.method,
-		path: c.req.path,
-		message: err.message,
-		stack: err.stack,
-	});
-
+app.onError((error, c) => {
+	console.error("[worker:error]", c.req.method, c.req.path, error);
 	if (
 		c.req.path === "/api" ||
 		c.req.path.startsWith("/api/") ||
@@ -137,6 +141,8 @@ app.notFound(async (c) => {
 	return assets.fetch(new Request(url.toString(), c.req.raw));
 });
 
-export default app;
+export default {
+	fetch: app.fetch,
+};
 
-export { CheckinScheduler } from "./services/checkin-scheduler";
+export { CheckinScheduler } from "./domains/checkin/scheduler";
